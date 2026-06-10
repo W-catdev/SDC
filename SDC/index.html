@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>霓虹废墟 · Neon Ruins</title>
+    <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+    <div id="game-wrapper">
+        <canvas id="game-canvas" width="1280" height="720"></canvas>
+
+        <!-- ========= 顶部 HUD ========= -->
+        <div id="hud-top">
+            <div class="hud-stat">
+                <span class="hud-icon hp">❤</span>
+                <div class="hud-bar"><div id="hp-fill" class="hud-fill hp-fill"></div></div>
+                <span id="hp-text" class="hud-text">100 / 100</span>
+            </div>
+            <div class="hud-stat">
+                <span class="hud-icon stm">⚡</span>
+                <div class="hud-bar"><div id="stm-fill" class="hud-fill stm-fill"></div></div>
+                <span id="stm-text" class="hud-text">100 / 100</span>
+            </div>
+            <div class="hud-stat loot-stat">
+                <span class="hud-icon loot">📦</span>
+                <span id="loot-text" class="hud-text">已搜刮: 0 点 · 负重 0/8kg</span>
+            </div>
+            <div class="hud-stat">
+                <span class="hud-icon rad">☢</span>
+                <span id="rad-text" class="hud-text">辐射: 0%</span>
+            </div>
+            <div class="hud-stat">
+                <span class="hud-icon cover">🛡</span>
+                <span id="cover-text" class="hud-text">暴露</span>
+            </div>
+            <div class="hud-stat mission-stat">
+                <span class="hud-icon mission">◆</span>
+                <span id="mission-text" class="hud-text">任务: 加载中...</span>
+            </div>
+        </div>
+
+        <!-- 武器信息条（右下角武器/弹药/护甲 -->
+        <div id="weapon-bar">
+            <div class="weapon-slot" id="weapon-slot-1">
+                <div class="slot-key">[1]</div>
+                <div class="slot-name">手枪</div>
+                <div class="slot-ammo">12 / 30</div>
+            </div>
+            <div class="weapon-slot" id="weapon-slot-2">
+                <div class="slot-key">[2]</div>
+                <div class="slot-name empty">空</div>
+                <div class="slot-ammo empty">-</div>
+            </div>
+            <div class="weapon-slot" id="weapon-slot-melee">
+                <div class="slot-key">[F]</div>
+                <div class="slot-name">战术刀</div>
+                <div class="slot-ammo">∞</div>
+            </div>
+            <div class="weapon-slot grenade-slot" id="weapon-slot-grenade">
+                <div class="slot-key">[G]</div>
+                <div class="slot-name" id="grenade-slot-name">破片</div>
+                <div class="slot-ammo" id="grenade-slot-ammo">×1</div>
+                <div class="grenade-charge" id="grenade-charge"></div>
+            </div>
+            <div class="weapon-slot" id="armor-slot">
+                <div class="slot-key">甲</div>
+                <div class="slot-name empty">无</div>
+                <div class="slot-ammo empty">-</div>
+            </div>
+        </div>
+
+        <!-- 交互提示 -->
+        <div id="interact-hint" class="hidden">按 [E] 搜刮</div>
+
+        <!-- 底部快捷物品栏 -->
+        <div id="hotbar">
+            <div class="hotbar-slot"><span class="slot-icon ammo">9mm</span><span id="count-9mm" class="slot-count">0</span><span class="slot-label">9mm</span></div>
+            <div class="hotbar-slot"><span class="slot-icon rifle">5.45</span><span id="count-rifle" class="slot-count">0</span><span class="slot-label">步枪弹</span></div>
+            <div class="hotbar-slot"><span class="slot-icon shotgun">12G</span><span id="count-shotgun" class="slot-count">0</span><span class="slot-label">霰弹</span></div>
+            <div class="hotbar-slot"><span class="slot-icon med">💊</span><span id="count-med" class="slot-count">0</span><span class="slot-label">医疗</span></div>
+            <div class="hotbar-slot"><span class="slot-icon food">🍫</span><span id="count-food" class="slot-count">0</span><span class="slot-label">食物</span></div>
+            <div class="hotbar-slot"><span class="slot-icon chip">🔋</span><span id="count-chip" class="slot-count">0</span><span class="slot-label">电池</span></div>
+            <div class="hotbar-slot"><span class="slot-icon rare">✦</span><span id="count-rare" class="slot-count">0</span><span class="slot-label">稀有</span></div>
+            <div class="hotbar-slot hotbar-inv-btn" id="open-inventory-hotbar">
+                <span class="slot-icon inv">⌂</span>
+                <span class="slot-label">装备</span>
+            </div>
+        </div>
+
+        <!-- 迷你雷达 -->
+        <div id="radar">
+            <canvas id="radar-canvas" width="180" height="180"></canvas>
+            <div class="radar-label">区域雷达</div>
+        </div>
+
+        <!-- 撤离点状态提示 -->
+        <div id="objective" class="hidden">
+            <div id="objective-text">搜刮物资 ≥ 120 点后，抵达撤离点</div>
+        </div>
+
+        <!-- 开始界面 -->
+        <div id="menu-overlay" class="overlay">
+            <div class="menu-box">
+                <h1 class="game-title">霓虹废墟</h1>
+                <p class="game-subtitle">NEON · RUINS</p>
+                <div class="menu-divider"></div>
+                <p class="menu-story">末日后 2087 年。曾经的霓虹都市已成废墟，辐射尘在空气中沉降。<br/>你是一名拾荒者，进入废墟——搜刮，战斗，撤离。活着，带回一切。</p>
+                <div class="menu-controls">
+                    <div><span class="key">WASD</span> 移动</div>
+                    <div><span class="key">SHIFT</span> 冲刺</div>
+                    <div><span class="key">鼠标左键</span> 开火</div>
+                    <div><span class="key">鼠标右键</span> 瞄准</div>
+                    <div><span class="key">1 / 2</span> 切换武器</div>
+                    <div><span class="key">F</span> 近战</div>
+                    <div><span class="key">R</span> 装弹</div>
+                    <div><span class="key">E</span> 搜刮 / 拾取</div>
+                    <div><span class="key">Q</span> 使用医疗包</div>
+                    <div><span class="key">G</span> 投掷手雷（单击切换 · 长按蓄力）</div>
+                    <div><span class="key">M</span> 开关背景音乐</div>
+                </div>
+                <div id="start-mini-panel" class="inv-mini">
+                    <canvas id="start-mini-canvas" width="180" height="240"></canvas>
+                    <div>
+                        <div class="inv-mini-stat" style="margin-bottom:8px"><b style="font-size:13px; letter-spacing:2px">出征前的拾荒者</b></div>
+                        <div class="inv-mini-stat">生命 <b>100</b> / 100</div>
+                        <div class="inv-mini-stat">负重 <b class="amber">0.0 / 8.0</b> kg</div>
+                        <div class="inv-mini-stat">起始武器 <b>手枪</b> · 弹药 <b class="amber">15</b></div>
+                        <div class="inv-mini-stat">仓库 <b class="amber" id="start-stash-count">0</b> / 40 项</div>
+                        <div class="inv-mini-stat">总价值 <b class="amber" id="start-stash-value">0</b> 点</div>
+                        <div class="inv-mini-stat">角色等级 <b class="cyan" id="start-player-level">1</b> · 经验 <b class="cyan" id="start-player-xp">0</b></div>
+                        <div class="inv-mini-stat" style="margin-top:10px; color:var(--neon-cyan)">[TAB] 战局中可打开装备页</div>
+                    </div>
+                </div>
+                <button id="start-btn" class="neon-btn">进入废墟</button>
+                <p class="menu-tip">提示：搜刮到 120 点物资后，找到闪烁的撤离点（站在圈内 5 秒脱离。</p>
+            </div>
+        </div>
+
+        <!-- 结算界面 -->
+        <div id="end-overlay" class="overlay hidden">
+            <div class="menu-box">
+                <h1 id="end-title" class="game-title">撤离成功</h1>
+                <p id="end-subtitle" class="game-subtitle">MISSION COMPLETE</p>
+                <div class="menu-divider"></div>
+                <div id="end-stats"></div>
+                <button id="restart-btn" class="neon-btn">再次出征</button>
+                <button id="open-inventory-btn" class="neon-btn secondary" style="margin-top:10px">整理仓库与装备</button>
+            </div>
+        </div>
+
+        <!-- ========= 库存 / 装备管理页（TAB） ========= -->
+        <div id="inventory-overlay" class="overlay hidden">
+            <div id="inventory-panel">
+                <!-- 顶部状态条 -->
+                <div class="inv-header">
+                    <div class="inv-title">装备与物资 <span class="inv-sub">[TAB] 关闭</span></div>
+                    <div class="inv-status">
+                        <span class="inv-stat">负重 <b id="inv-weight">0</b> / <b id="inv-weight-max">8.0</b> kg</span>
+                        <span class="inv-stat">价值 <b id="inv-value">0</b> 点</span>
+                        <span class="inv-stat" id="inv-context-label">战局中 · 拾取后无法放回仓库</span>
+                    </div>
+                </div>
+
+                <div class="inv-body">
+                    <!-- 左：仓库 -->
+                    <div class="inv-column" id="inv-stash-col">
+                        <div class="inv-col-title">仓库 STASH <span id="inv-stash-count" class="inv-col-sub">0 项</span></div>
+                        <div class="inv-grid" id="inv-stash-grid"></div>
+                    </div>
+
+                    <!-- 中：人物 + 装备槽 -->
+                    <div class="inv-column inv-column-center">
+                        <div class="inv-col-title">装备</div>
+                        <div class="inv-character-wrap">
+                            <canvas id="inv-character" width="180" height="240"></canvas>
+                            <div class="inv-equip-list">
+                                <div class="inv-equip-slot" data-slot="head">
+                                    <div class="inv-slot-key">头</div>
+                                    <div class="inv-slot-content"></div>
+                                </div>
+                                <div class="inv-equip-slot" data-slot="body">
+                                    <div class="inv-slot-key">甲</div>
+                                    <div class="inv-slot-content"></div>
+                                </div>
+                                <div class="inv-equip-slot" data-slot="primary">
+                                    <div class="inv-slot-key">主武</div>
+                                    <div class="inv-slot-content"></div>
+                                </div>
+                                <div class="inv-equip-slot" data-slot="secondary">
+                                    <div class="inv-slot-key">副武</div>
+                                    <div class="inv-slot-content"></div>
+                                </div>
+                                <div class="inv-equip-slot" data-slot="melee">
+                                    <div class="inv-slot-key">近战</div>
+                                    <div class="inv-slot-content"></div>
+                                </div>
+                                <div class="inv-equip-slot" data-slot="backpack">
+                                    <div class="inv-slot-key">背包</div>
+                                    <div class="inv-slot-content"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 右：本局背包 -->
+                    <div class="inv-column" id="inv-bag-col">
+                        <div class="inv-col-title">本局背包 <span id="inv-bag-count" class="inv-col-sub">0 项</span></div>
+                        <div class="inv-grid" id="inv-bag-grid"></div>
+                    </div>
+                </div>
+
+                <!-- 底部：物品详情 -->
+                <div class="inv-footer">
+                    <div id="inv-detail" class="inv-detail empty">悬停物品查看详情 · 双击装备 · 单击装备槽卸下</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 画面滤镜 -->
+        <div id="film-filter"></div>
+    </div>
+
+    <script src="game.js"></script>
+</body>
+</html>
