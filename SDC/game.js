@@ -396,20 +396,7 @@ const G = {
     grenades: [],                // 飞行中的手雷
     fireZones: [],               // 燃烧瓶留下的火焰区域
     pendingExplosions: [],       // 待触发的爆炸事件（避免在迭代中修改数组）
-    selectedGrenade: 0,          // 当前选中的手雷槽位索引
-    grenadeHoldTime: 0,          // 手雷蓄力时长
-    // === v1.1.x 手感与反馈 ===
-    weaponAnim: { state: 'idle', startTime: 0, duration: 0 },
-    reloadState: null,
-    damageSourceAngles: [],
-    killConfirm: null,
-    // === v1.2.x 敌人智能与动态难度 ===
-    audioEvents: [],
-    discoveredCorpses: {},
-    dynamicDiff: { level: 1.0, killsInWindow: 0, damageTaken: 0, windowStart: 0 },
-    // === v1.3.x 物理/环境互动 ===
-    barrels: [],
-    doorQTE: null
+    selectedGrenade: 0           // 当前选中的手雷槽位索引
 };
 
 // === 仓库（跨局持久） ===
@@ -1519,27 +1506,6 @@ function initWorld() {
     ];
     for (const z of zones) G.extractZones.push(createExtractZone(z.x, z.y));
 
-    // === v1.3.3 油桶/气罐（可爆炸） ===
-    G.barrels = [];
-    for (let i = 0; i < 10; i++) {
-        const bx = rand(300, WORLD.w - 300);
-        const by = rand(300, WORLD.h - 300);
-        if (dist({x:bx,y:by}, G.player) < 350) continue;
-        let tooClose = false;
-        for (const b2 of G.barrels) if (dist({x:bx,y:by}, b2) < 80) { tooClose = true; break; }
-        if (tooClose) continue;
-        const isGas = Math.random() < 0.4; // 40% 气罐（燃烧+毒烟），60% 油桶（爆炸）
-        G.barrels.push({
-            x: bx, y: by, r: 14,
-            hp: isGas ? 25 : 40, maxHp: isGas ? 25 : 40,
-            type: isGas ? 'gas' : 'barrel',
-            exploded: false,
-            color: isGas ? '#5a4a3a' : '#7a3a2a',
-            shake: 0, alert: 0,
-            id: i
-        });
-    }
-
     // 装饰 — 霓虹招牌（偶尔出现）
     for (let i = 0; i < 10; i++) {
         G.props.push({
@@ -1561,13 +1527,11 @@ document.addEventListener('keydown', (e) => {
     if (k === '1' || k === '2') {
         const idx = parseInt(k, 10) - 1;
         if (G.player.weapons[idx] && !G.player.reloading && idx !== G.player.currentWeapon) {
-            // v1.1.1 武器切换动画
-            const now = performance.now();
-            const newW = G.player.weapons[idx];
-            G.lastSwitchAt = now;
-            G.weaponAnim = { state: 'switch', startTime: now, duration: newW.switchTime || 300 };
+            // 记录切换时间用于开火锁定
+
+            G.lastSwitchAt = performance.now();
             G.player.currentWeapon = idx;
-            G.weaponRecoil = 0;
+            G.weaponRecoil = 0; // 切枪时清空后坐力
             Sound.switchWeapon();
         }
     }
@@ -1575,11 +1539,9 @@ document.addEventListener('keydown', (e) => {
         // 切换到近战（临时把武器切到 knife）
         const kw = G.player.weapons.find(w => w.key === 'knife');
         const currentIdx = G.player.weapons[G.player.currentWeapon];
-        if (currentIdx && currentIdx.key === 'knife') return;
+        if (currentIdx && currentIdx.key === 'knife') return; // 已经是 knife
         if (!kw) G.player.weapons.push(createWeapon('knife'));
-        const now = performance.now();
-        G.lastSwitchAt = now;
-        G.weaponAnim = { state: 'switch', startTime: now, duration: 200 };
+        G.lastSwitchAt = performance.now();
         G.weaponRecoil = 0;
         G.player.currentWeapon = G.player.weapons.findIndex(w => w.key === 'knife');
         Sound.switchWeapon();
@@ -1651,26 +1613,17 @@ function tryReload() {
     if (w.mag >= w.maxMag) return;
     const invKey = w.ammoType;
     if ((G.player.inventory[invKey] || 0) <= 0) return;
-    // v1.1.2 多阶段装填动画：out(卸弹夹) -> in(填装) -> finish(归位)
-    const now = performance.now();
     G.player.reloading = true;
-    G.player.lastReload = now;
-    G.reloadState = { startTime: now, duration: w.reloadTime, stage: 0, ammoKey: invKey, weaponRef: w };
-    G.weaponAnim = { state: 'reload', startTime: now, duration: w.reloadTime };
+    G.player.lastReload = performance.now();
     Sound.reload();
     setTimeout(() => {
         if (!G.player || G.ended) return;
-        if (!G.reloadState) return;
-        const w2 = G.reloadState.weaponRef;
-        if (!w2) return;
-        const need = w2.maxMag - w2.mag;
-        const have = G.player.inventory[G.reloadState.ammoKey] || 0;
+        const need = w.maxMag - w.mag;
+        const have = G.player.inventory[invKey] || 0;
         const take = Math.min(need, have);
-        w2.mag += take;
-        G.player.inventory[G.reloadState.ammoKey] = have - take;
+        w.mag += take;
+        G.player.inventory[invKey] = have - take;
         G.player.reloading = false;
-        G.reloadState = null;
-        G.weaponAnim = { state: 'reloadDone', startTime: performance.now(), duration: 150 };
     }, w.reloadTime);
 }
 
@@ -1907,7 +1860,6 @@ function tryShoot(now) {
     if (w.melee) {
         p.lastShot = now;
         p.lastMelee = now;
-        G.weaponAnim = { state: 'melee', startTime: now, duration: 260 };
         G.camera.shake = Math.min(G.camera.shake + 2.5, 10);
         // 对近距离敌人造成伤害
         for (const e of G.enemies) {
@@ -1928,8 +1880,6 @@ function tryShoot(now) {
         // 近战粒子效果
         spawnParticles(p.x + Math.cos(p.angle) * 20, p.y + Math.sin(p.angle) * 20,
                        '#ffffff', 4, 60);
-        // v1.2.1 听觉系统 — 近战
-        G.audioEvents.push({ x: p.x, y: p.y, strength: 120, age: 0, life: 1.2, sourceType: 'melee' });
         return;
     }
 
@@ -1944,9 +1894,6 @@ function tryShoot(now) {
     p.lastShot = now;
     G.lastShootAt = now;
     w.mag--;
-
-    // v1.1.x 开火动画（后坐回弹）
-    G.weaponAnim = { state: 'fire', startTime: now, duration: 180 };
 
     // === 后坐力累加（每发子弹增加，霰弹加得最多）
     G.weaponRecoil = Math.min(5.0, G.weaponRecoil + w.recoil);
@@ -1991,8 +1938,6 @@ function tryShoot(now) {
         if (e.state === 'dead') continue;
         if (dist(e, p) < alertRange) { e.state = 'chase'; e.alertTimer = 5; }
     }
-    // v1.2.1 听觉事件 — 敌人 AI 自行感知
-    G.audioEvents.push({ x: p.x, y: p.y, strength: alertRange, age: 0, life: 2.0, sourceType: 'gunshot' });
 }
 
 function normalizeAngle(a) {
@@ -2004,12 +1949,6 @@ function normalizeAngle(a) {
 // -------------------- 敌人受击 / 死亡 --------------------
 function damageEnemy(e, dmg, fromAngle) {
     const origDmg = dmg;
-    // === v1.1.5 爆头判定：弹道命中角度接近敌人正面（±25°）为爆头 ===
-    const hitAngle = Math.atan2(G.player.y - e.y, G.player.x - e.x);
-    const relativeAngle = Math.abs(normalizeAngle(hitAngle - (e.facing || 0)));
-    // 头部区域：敌人正面 ±25°，且距离 < 500 时高概率爆头
-    const headshotChance = (relativeAngle < 0.45 && dist(G.player, e) < 500) ? 0.28 : 0.05;
-    const isHeadshot = Math.random() < headshotChance;
     // === 装甲减伤 ===
     if (e.armored) {
         dmg *= (1 - e.armorReduction);
@@ -2019,8 +1958,6 @@ function damageEnemy(e, dmg, fromAngle) {
         e.stealthTimer = 0; // 取消隐身
         dmg *= 1.5; // 偷袭伤害加成
     }
-    // 爆头加倍伤害
-    if (isHeadshot) dmg *= 2.2;
     e.hp -= dmg;
     e.hitFlash = 0.15;
     e.state = 'chase';
@@ -2028,29 +1965,18 @@ function damageEnemy(e, dmg, fromAngle) {
     // 击退
     e.kbX = Math.cos(fromAngle) * 180;
     e.kbY = Math.sin(fromAngle) * 180;
-    // 血花（暗化，爆头更红更猛烈）
-    spawnParticles(e.x, e.y, isHeadshot ? '#ff5050' : '#4a2a2a', isHeadshot ? 18 : 10, 90);
+    // 血花（暗化）
+    spawnParticles(e.x, e.y, '#4a2a2a', 10, 90);
     // 装甲兵受击溅出金属火花
     if (e.armored) {
         spawnParticles(e.x, e.y, '#aaaaaa', 6, 80);
     }
-    if (isHeadshot) {
-        spawnDamageNumber(e.x, e.y, dmg, 'headshot', true);
-        G.camera.shake = Math.min(G.camera.shake + 3.5, 12);
-    }
+    G.camera.shake = Math.min(G.camera.shake + 1.5, 10);
     if (e.hp <= 0) {
         e.state = 'dead';
         Sound.enemyDown();
-        // === v1.1.4 击杀时停 + 镜头推近 ===
-        G.killConfirm = {
-            startTime: performance.now(),
-            duration: isHeadshot ? 260 : 180,
-            x: e.x, y: e.y,
-            isHeadshot: isHeadshot
-        };
         // === 成就系统：记录击杀 ===
         recordAchievementEvent('kill');
-        if (isHeadshot) recordAchievementEvent('headshot');
         if (e.stealth) recordAchievementEvent('stealth_kill');
         if (e.causeOfDeath === 'melee') recordAchievementEvent('melee_kill');
         if (e.causeOfDeath === 'grenade') recordAchievementEvent('grenade_kill');
@@ -2069,8 +1995,6 @@ function damageEnemy(e, dmg, fromAngle) {
             G.camera.shake = Math.min(G.camera.shake + 8, 16);
         }
         G.camera.shake = Math.min(G.camera.shake + 6, 14);
-        // v1.2.3 动态难度 — 记录窗口内击杀
-        G.dynamicDiff.killsInWindow = (G.dynamicDiff.killsInWindow || 0) + 1;
         // 任务追踪：精英击杀
         if ((e.type === 'elite' || e.type === 'armored') && G.mission && G.mission.id === 'headhunter') {
             G.mission.eliteKilled = (G.mission.eliteKilled || 0) + 1;
@@ -2891,7 +2815,6 @@ function update(now) {
     const p = G.player;
 
     // 翻越中：自动移动到目标位置
-    let mx = 0, my = 0, mag = 0, speed = 0, isSprinting = false;
     if (p.vaulting && p.vaultTarget) {
         const vaultProgress = Math.min(1, (now - p.vaultStart) / 400);
         // 抛物线运动：先快后慢，带一点"跳跃"感
@@ -2899,16 +2822,17 @@ function update(now) {
         p.x = lerp(p.x, p.vaultTarget.x, ease * 0.15);
         p.y = lerp(p.y, p.vaultTarget.y, ease * 0.15);
     } else {
+        let mx = 0, my = 0;
         if (G.keys['w'] || G.keys['arrowup'])    my -= 1;
         if (G.keys['s'] || G.keys['arrowdown'])  my += 1;
         if (G.keys['a'] || G.keys['arrowleft'])  mx -= 1;
         if (G.keys['d'] || G.keys['arrowright']) mx += 1;
-        mag = Math.hypot(mx, my);
+        const mag = Math.hypot(mx, my);
         if (mag > 0) { mx /= mag; my /= mag; }
 
-        speed = p.speed;
+        let speed = p.speed;
         // 冲刺
-        isSprinting = (G.keys['shift']) && p.stamina > 5 && mag > 0;
+        const isSprinting = (G.keys['shift']) && p.stamina > 5 && mag > 0;
         if (isSprinting) {
             speed *= p.sprintMul;
             p.stamina = Math.max(0, p.stamina - 35 * dt);
@@ -3005,52 +2929,6 @@ function update(now) {
         // 命中检测
         let consumed = false;
         if (b.owner === 'player') {
-            // === v1.3.3 油桶爆炸物：玩家子弹命中油桶 ===
-            let hitBarrel = null;
-            for (let bi = 0; bi < G.barrels.length; bi++) {
-                const br = G.barrels[bi];
-                if (br.exploded) continue;
-                const d2 = (nbx - br.x) ** 2 + (nby - br.y) ** 2;
-                if (d2 < (br.r + 4) ** 2) {
-                    br.hp -= b.dmg;
-                    br.shake = 0.2;
-                    spawnParticles(nbx, nby, '#aa5a3a', 4, 50);
-                    spawnDamageNumber(nbx, nby, b.dmg * 0.5, 'normal', false);
-                    hitBarrel = br;
-                    if (br.hp <= 0) {
-                        br.exploded = true;
-                        const blastR = br.type === 'gas' ? 110 : 130;
-                        const edmg = br.type === 'gas' ? 35 : 70;
-                        spawnImpactEffect(br.x, br.y, 'shockwave', '#ffaa66');
-                        spawnParticles(br.x, br.y, br.type === 'gas' ? '#ff7755' : '#ffaa66', 24, 160);
-                        G.camera.shake = Math.min(G.camera.shake + 10, 18);
-                        Sound.hit();
-                        for (const e of G.enemies) {
-                            if (e.state === 'dead') continue;
-                            const d2 = Math.hypot(e.x - br.x, e.y - br.y);
-                            if (d2 < blastR) {
-                                const falloff = 1 - (d2 / blastR);
-                                damageEnemy(e, edmg * falloff, Math.atan2(e.y - br.y, e.x - br.x));
-                            }
-                        }
-                        const dp = Math.hypot(p.x - br.x, p.y - br.y);
-                        if (dp < blastR * 0.8) {
-                            const falloff = 1 - (dp / (blastR * 0.8));
-                            p.hp -= edmg * falloff * 0.5;
-                            if (p.hp <= 0) { p.hp = 0; endGame(false); }
-                        }
-                        if (br.type === 'gas') {
-                            G.fireZones.push({
-                                x: br.x, y: br.y, radius: 90, life: 4, age: 0,
-                                tickInterval: 0.4, tickTimer: 0, dmg: 12
-                            });
-                        }
-                    }
-                    consumed = true;
-                    break;
-                }
-            }
-            if (consumed) continue;
             for (const e of G.enemies) {
                 if (e.state === 'dead') continue;
                 if ((nbx - e.x) ** 2 + (nby - e.y) ** 2 < (e.r + 4) ** 2) {
@@ -3092,15 +2970,6 @@ function update(now) {
                 const hitAngle = Math.atan2(b.vy, b.vx);
                 spawnImpactEffect(nbx, nby, p.inCover ? 'cover' : 'flesh', b.color, hitAngle + Math.PI);
                 spawnDamageNumber(nbx, nby, dmg, p.inCover ? 'cover' : 'normal', false);
-                // === v1.1.3 受击方向指示（屏幕边缘箭头）===
-                const fromEnemyAngle = Math.atan2(nby - p.y, nbx - p.x);
-                G.damageSourceAngles.push({
-                    angle: fromEnemyAngle,
-                    age: 0, life: 1.6,
-                    sourceId: b.ownerId
-                });
-                // === v1.2.3 动态难度 —— 玩家受到的伤害记录
-                G.dynamicDiff.damageTaken = (G.dynamicDiff.damageTaken || 0) + dmg;
                 if (p.hp <= 0) { p.hp = 0; endGame(false); }
                 consumed = true;
             }
@@ -3148,7 +3017,6 @@ function update(now) {
     for (const e of G.enemies) {
         if (e.state === 'dead') continue;
         if (e.hitFlash > 0) e.hitFlash -= dt;
-        e._heardThis = false; // 重置本帧听觉标记
 
         // 击退：先应用外力，再衰减
         e.x += e.kbX * dt;
@@ -3221,49 +3089,6 @@ function update(now) {
         }
 
         // === 搜打撤 智能AI ===
-        // === v1.2.1 听觉系统：检查是否听到声音事件 ===
-        if (e.state === 'patrol' || e.state === 'alert') {
-            for (const snd of G.audioEvents) {
-                const ds = Math.hypot(snd.x - e.x, snd.y - e.y);
-                const hearR = snd.strength + (snd.sourceType === 'gunshot' ? 100 : 60);
-                if (ds < hearR && !e._heardThis) {
-                    if (e.state === 'patrol') e.state = 'alert';
-                    e.moveState = 'investigate';
-                    e.alertTimer = Math.max(e.alertTimer || 0, 6);
-                    e.investigateTarget = { x: snd.x + rand(-40, 40), y: snd.y + rand(-40, 40) };
-                    e._heardThis = true;
-                    if (snd.sourceType === 'gunshot' && ds < 300) { e.state = 'chase'; }
-                    break;
-                }
-            }
-        }
-        // === v1.2.2 尸体发现：巡逻时如果看到附近有同伴尸体则警觉 ===
-        if (e.state === 'patrol' || e.state === 'alert') {
-            for (const corpse of G.enemies) {
-                if (corpse.state !== 'dead' || corpse === e) continue;
-                const key = `${Math.round(corpse.x)}_${Math.round(corpse.y)}`;
-                if (G.discoveredCorpses[key]) continue;
-                const dCorpse = Math.hypot(corpse.x - e.x, corpse.y - e.y);
-                if (dCorpse < 180) {
-                    if (e.state === 'patrol') e.state = 'alert';
-                    e.moveState = 'investigate';
-                    e.alertTimer = 8;
-                    e.investigateTarget = { x: corpse.x, y: corpse.y };
-                    G.discoveredCorpses[key] = true;
-                    // 通知附近同伴警戒
-                    for (const other of G.enemies) {
-                        if (other.state === 'dead' || other === e) continue;
-                        if (Math.hypot(other.x - e.x, other.y - e.y) < 220) {
-                            if (other.state === 'patrol') other.state = 'alert';
-                            other.alertTimer = 6;
-                            other.moveState = 'investigate';
-                            other.investigateTarget = { x: corpse.x + rand(-40,40), y: corpse.y + rand(-40,40) };
-                        }
-                    }
-                    break;
-                }
-            }
-        }
         if (e.state === 'patrol') {
             // 发现玩家
             if (canSeePlayer) {
@@ -3291,7 +3116,7 @@ function update(now) {
             e.alertTimer -= dt;
 
             // 远距离丢失目标
-            if (toPlayer > e.loseRange && e.state !== 'alert') {
+            if (toPlayer > e.loseRange) {
                 e.state = 'patrol';
                 e.patrolTarget = null;
                 e.coverTarget = null;
@@ -3299,32 +3124,6 @@ function update(now) {
                 continue;
             }
             if (e.alertTimer <= 0) { e.state = 'patrol'; e.coverTarget = null; continue; }
-
-            // === alert（调查）状态：向 investigateTarget 移动并四处张望 ===
-            if (e.state === 'alert' && e.investigateTarget) {
-                if (canSeePlayer) {
-                    e.state = 'chase';
-                    e.alertTimer = e.alertDuration;
-                    e.moveState = 'approach';
-                    e.investigateTarget = null;
-                    alertNearbyEnemies(e);
-                } else {
-                    const a = Math.atan2(e.investigateTarget.y - e.y, e.investigateTarget.x - e.x);
-                    e.angle = lerp(e.angle, a, 0.08);
-                    const nx = e.x + Math.cos(a) * e.speed * 0.5 * dt;
-                    const ny = e.y + Math.sin(a) * e.speed * 0.5 * dt;
-                    if (!pointInCovers(nx, e.y)) e.x = clamp(nx, 80, WORLD.w - 80);
-                    if (!pointInCovers(e.x, ny)) e.y = clamp(ny, 80, WORLD.h - 80);
-                    if (Math.hypot(e.investigateTarget.x - e.x, e.investigateTarget.y - e.y) < 30) {
-                        if (e.alertTimer <= 0) {
-                            e.state = 'patrol';
-                            e.investigateTarget = null;
-                            e.patrolTarget = null;
-                        }
-                    }
-                    continue;
-                }
-            }
 
             // === 战术决策：根据血量、距离、同伴位置决定行为 ===
             const hpRatio = e.hp / e.maxHp;
@@ -3487,48 +3286,6 @@ function update(now) {
                     }
                 }
             }
-        }
-    }
-
-    // === v1.3.x 油桶 shake/alert 衰减 ===
-    for (const br of G.barrels) {
-        if (br.shake > 0) br.shake = Math.max(0, br.shake - dt);
-        if (br.alert > 0) br.alert = Math.max(0, br.alert - dt);
-    }
-    // === v1.2.1 听觉事件老化 ===
-    G.audioEvents = G.audioEvents.filter(s => {
-        s.age += dt;
-        return s.age < s.life;
-    });
-    // === v1.1.3 受击方向指示老化 ===
-    G.damageSourceAngles = G.damageSourceAngles.filter(d => {
-        d.age += dt;
-        return d.age < d.life;
-    });
-    // === v1.2.3 动态难度：根据窗口内击杀/受击调整敌人参数 ===
-    const dd = G.dynamicDiff;
-    dd._windowTimer = (dd._windowTimer || 0) + dt;
-    if (dd._windowTimer > 8) {
-        // 8 秒为一窗口，重新评估难度
-        const kills = dd.killsInWindow || 0;
-        const dmgTaken = dd.damageTaken || 0;
-        let targetLevel = 1.0;
-        if (kills >= 3 && dmgTaken < 40) targetLevel = 1.3;
-        else if (kills >= 2) targetLevel = 1.1;
-        else if (dmgTaken > 120) targetLevel = 0.75;
-        else if (kills === 0) targetLevel = 0.85;
-        // 平滑过渡
-        dd.level = (dd.level || 1.0) * 0.7 + targetLevel * 0.3;
-        dd.killsInWindow = 0;
-        dd.damageTaken = 0;
-        dd._windowTimer = 0;
-        // 将难度系数应用到敌人（保留基础值）
-        for (const e of G.enemies) {
-            if (e._baseSpeed === undefined) e._baseSpeed = e.speed;
-            if (e._baseAtkRate === undefined) e._baseAtkRate = e.atkRate;
-            e.speed = e._baseSpeed * dd.level;
-            e.atkRate = e._baseAtkRate / Math.sqrt(dd.level);
-            e.alertDuration = 4 + (dd.level - 1) * 3;
         }
     }
 
@@ -4132,42 +3889,6 @@ function render() {
     // 搜刮容器
     for (const c of G.containers) drawContainer(c);
 
-    // === v1.3.3 油桶绘制 ===
-    for (const br of G.barrels) {
-        if (br.exploded) continue;
-        ctx.save();
-        const sh = (br.shake || 0) > 0 ? (Math.random() - 0.5) * 3 : 0;
-        const sx = br.x + sh;
-        const sy = br.y + sh;
-        // 阴影
-        ctx.fillStyle = 'rgba(0,0,0,0.4)';
-        ctx.beginPath();
-        ctx.ellipse(sx, sy + 10, br.r + 2, 5, 0, 0, Math.PI * 2);
-        ctx.fill();
-        // 主体
-        ctx.fillStyle = br.color || '#7a3a2a';
-        ctx.beginPath();
-        ctx.arc(sx, sy, br.r, 0, Math.PI * 2);
-        ctx.fill();
-        // 高光
-        ctx.fillStyle = br.type === 'gas' ? '#ff8866' : '#ffaa55';
-        ctx.beginPath();
-        ctx.arc(sx - br.r * 0.3, sy - br.r * 0.3, br.r * 0.35, 0, Math.PI * 2);
-        ctx.fill();
-        // 顶部符号（油桶顶盖）
-        ctx.fillStyle = '#222';
-        ctx.fillRect(sx - 2, sy - br.r - 2, 4, 3);
-        // 血量条
-        if (br.hp < br.maxHp) {
-            const hpPct = br.hp / br.maxHp;
-            ctx.fillStyle = '#442211';
-            ctx.fillRect(sx - br.r, sy - br.r - 8, br.r * 2, 3);
-            ctx.fillStyle = hpPct > 0.3 ? '#ff7733' : '#ff3322';
-            ctx.fillRect(sx - br.r, sy - br.r - 8, br.r * 2 * hpPct, 3);
-        }
-        ctx.restore();
-    }
-
     // 地上物品
     for (const it of G.groundItems) drawGroundItem(it);
 
@@ -4201,63 +3922,6 @@ function render() {
 
     // 飘字伤害数字（最顶层）
     drawDamageNumbers();
-
-    // === v1.1.3 受击方向指示（屏幕边缘箭头） ===
-    if (G.damageSourceAngles.length > 0) {
-        const cx = canvas.width / 2;
-        const cy = canvas.height / 2;
-        const radius = Math.min(cx, cy) - 80;
-        for (const ang of G.damageSourceAngles) {
-            const agePct = ang.age / ang.life;
-            const alpha = 1 - agePct;
-            const px = cx + Math.cos(ang.angle) * radius;
-            const py = cy + Math.sin(ang.angle) * radius;
-            ctx.save();
-            ctx.translate(px, py);
-            ctx.rotate(ang.angle);
-            ctx.globalAlpha = alpha * 0.9;
-            ctx.fillStyle = '#ff4444';
-            ctx.strokeStyle = '#ffaaaa';
-            ctx.lineWidth = 2;
-            ctx.beginPath();
-            ctx.moveTo(14, 0);
-            ctx.lineTo(-10, -8);
-            ctx.lineTo(-6, 0);
-            ctx.lineTo(-10, 8);
-            ctx.closePath();
-            ctx.fill();
-            ctx.stroke();
-            ctx.restore();
-        }
-    }
-
-    // === v1.1.4 击杀时停 + 镜头推近提示 ===
-    if (G.killConfirm) {
-        const kc = G.killConfirm;
-        const dt = performance.now() - kc.startTime;
-        if (dt < kc.duration) {
-            const pct = dt / kc.duration;
-            const alpha = 1 - pct;
-            const screenX = canvas.width / 2;
-            const screenY = canvas.height / 2;
-            ctx.save();
-            ctx.globalAlpha = alpha * 0.5;
-            ctx.strokeStyle = kc.isHeadshot ? '#ff6666' : '#7fd0ff';
-            ctx.lineWidth = kc.isHeadshot ? 3 : 2;
-            ctx.beginPath();
-            ctx.arc(screenX, screenY, 40 + pct * 40, 0, Math.PI * 2);
-            ctx.stroke();
-            ctx.font = `bold ${kc.isHeadshot ? 22 : 16}px "Segoe UI", sans-serif`;
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillStyle = kc.isHeadshot ? '#ffaaaa' : '#cceeff';
-            ctx.globalAlpha = alpha;
-            ctx.fillText(kc.isHeadshot ? '爆头！' : '击杀', screenX, screenY - 80);
-            ctx.restore();
-        } else {
-            G.killConfirm = null;
-        }
-    }
 
     ctx.restore();
 
@@ -5216,39 +4880,12 @@ function drawPlayer(p) {
 
     // 2.4 手臂（按武器状态不同形态）
     const w = p.weapons[p.currentWeapon];
-    // === v1.1.x 武器动画状态（切枪/开火/装填/近战）===
-    const nowT = performance.now();
-    let armRetract = 0;      // 枪身后退量（开火后坐）
-    let weaponRaise = 0;     // 武器下沉量（切枪/装填）
-    let weaponBob = 0;       // 垂直微抖
-    if (G.weaponAnim && G.weaponAnim.startTime) {
-        const dta = nowT - G.weaponAnim.startTime;
-        if (dta < G.weaponAnim.duration) {
-            const t = dta / G.weaponAnim.duration;
-            if (G.weaponAnim.state === 'fire') {
-                armRetract = Math.sin(t * Math.PI) * 4;
-            } else if (G.weaponAnim.state === 'switch') {
-                weaponRaise = Math.sin(t * Math.PI) * -6;
-            } else if (G.weaponAnim.state === 'reload') {
-                weaponRaise = -6 + Math.sin(t * Math.PI * 6) * 1.2;
-                armRetract = 3;
-            } else if (G.weaponAnim.state === 'reloadDone') {
-                weaponRaise = Math.sin(t * Math.PI) * -2;
-            } else if (G.weaponAnim.state === 'melee') {
-                armRetract = Math.sin(t * Math.PI) * -8; // 前刺
-            }
-        }
-    }
-    // 移动微抖
-    const speedNow = Math.hypot(p.vx || 0, p.vy || 0);
-    if (speedNow > 20) weaponBob = Math.sin(G.time * 10) * 0.6;
-
     if (w && !w.melee) {
         // 持枪手：前伸
+        // 持枪臂（沿 p.angle 方向）
         const a = p.angle;
-        const baseReach = 11 - armRetract;
-        const gx = p.x + Math.cos(a) * baseReach;
-        const gy = p.y + Math.sin(a) * baseReach + weaponBob + weaponRaise;
+        const gx = p.x + Math.cos(a) * 11;
+        const gy = p.y + Math.sin(a) * 11;
         // 手臂阴影
         ctx.strokeStyle = c.vest;
         ctx.lineWidth = 3;
