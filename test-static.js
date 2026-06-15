@@ -74,7 +74,9 @@ const documentStub = {
         textContent: '', innerHTML: '', style: {},
         classList: { add: () => {}, remove: () => {}, toggle: () => {} },
         appendChild: () => {},
-        removeChild: () => {}
+        removeChild: () => {},
+        querySelector: () => null,
+        remove: () => {}
     }),
     querySelectorAll: () => [],
     body: {
@@ -88,7 +90,8 @@ const documentStub = {
         addEventListener: () => {},
         classList: { add: () => {}, remove: () => {} },
         appendChild: () => {},
-        querySelector: () => ({ textContent: '', innerHTML: '' })
+        remove: () => {},
+        querySelector: () => ({ textContent: '', innerHTML: '', getContext: () => stubCtx, width: 200, height: 200 })
     })
 };
 
@@ -527,4 +530,5 @@ try {
 }
 
 console.log('\n===== 静态功能测试完成 =====');
+process.exit(0);
 
