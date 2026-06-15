@@ -932,3 +932,270 @@ body {
 .menu-box .inv-mini-stat { color: var(--text-dim); }
 .menu-box .inv-mini-stat b { color: var(--neon-cyan); margin: 0 3px; font-variant-numeric: tabular-nums; }
 .menu-box .inv-mini-stat .amber { color: var(--warm-amber); }
+
+/* =====================================================
+   v1.7 战局内搜刮拾取界面 (LOOT-UI)
+   ===================================================== */
+.loot-window {
+    position: absolute;
+    inset: 0;
+    background: rgba(10, 12, 15, 0.45);
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    padding-bottom: 8vh;
+    z-index: 90;
+    animation: lootWindowIn 0.25s ease-out;
+    pointer-events: auto;
+}
+@keyframes lootWindowIn {
+    from { opacity: 0; transform: translateY(40px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+.loot-window.hidden { display: none !important; }
+
+#loot-panel {
+    width: 720px;
+    max-width: 90vw;
+    background: rgba(10, 12, 15, 0.92);
+    border: 1px solid var(--neon-cyan);
+    box-shadow: 0 0 30px rgba(94, 200, 224, 0.25),
+                0 0 60px rgba(94, 200, 224, 0.08) inset;
+    padding: 0;
+    position: relative;
+    backdrop-filter: blur(2px);
+}
+#loot-panel::before, #loot-panel::after {
+    content: "";
+    position: absolute;
+    width: 24px;
+    height: 24px;
+    border: 2px solid var(--neon-cyan);
+    pointer-events: none;
+}
+#loot-panel::before {
+    top: -1px; left: -1px;
+    border-right: none; border-bottom: none;
+}
+#loot-panel::after {
+    bottom: -1px; right: -1px;
+    border-left: none; border-top: none;
+}
+
+.loot-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 16px;
+    border-bottom: 1px dashed rgba(94, 200, 224, 0.22);
+    background: linear-gradient(180deg, rgba(94, 200, 224, 0.06), transparent);
+}
+.loot-title { display: flex; align-items: center; gap: 10px; }
+.loot-icon { font-size: 18px; color: var(--warm-amber); text-shadow: 0 0 8px rgba(216, 164, 92, 0.4); }
+#loot-title-text {
+    font-size: 14px;
+    letter-spacing: 2px;
+    color: var(--text-main);
+}
+.loot-count {
+    font-size: 11px;
+    color: var(--text-dim);
+    letter-spacing: 1px;
+    margin-left: 4px;
+}
+.loot-close {
+    background: transparent;
+    border: 1px solid rgba(94, 200, 224, 0.3);
+    color: var(--neon-cyan);
+    padding: 4px 10px;
+    font-size: 10px;
+    letter-spacing: 1px;
+    cursor: pointer;
+    font-family: inherit;
+    transition: all 0.15s ease;
+}
+.loot-close:hover {
+    background: rgba(94, 200, 224, 0.12);
+    box-shadow: 0 0 10px rgba(94, 200, 224, 0.3);
+}
+
+.loot-grid {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 8px;
+    padding: 14px;
+    max-height: 260px;
+    overflow-y: auto;
+}
+.loot-grid::-webkit-scrollbar { width: 4px; }
+.loot-grid::-webkit-scrollbar-thumb { background: rgba(94, 200, 224, 0.3); }
+
+.loot-card {
+    aspect-ratio: 1 / 1;
+    background: rgba(20, 24, 30, 0.7);
+    border: 1px dashed rgba(94, 200, 224, 0.3);
+    padding: 6px 4px;
+    cursor: pointer;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: space-between;
+    transition: all 0.15s ease;
+    overflow: hidden;
+    user-select: none;
+}
+.loot-card:hover {
+    background: rgba(30, 36, 44, 0.85);
+    border-color: var(--neon-cyan);
+    border-style: solid;
+    transform: translateY(-2px);
+    box-shadow: 0 0 12px rgba(94, 200, 224, 0.3) inset;
+}
+.loot-card.picked {
+    opacity: 0.35;
+    border-color: var(--warm-amber);
+    border-style: solid;
+    pointer-events: none;
+}
+.loot-card.picked::after {
+    content: "已拾取";
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 9px;
+    color: var(--warm-amber);
+    letter-spacing: 2px;
+    background: rgba(0, 0, 0, 0.4);
+}
+.loot-card .card-icon {
+    font-size: 22px;
+    margin-top: 4px;
+    line-height: 1;
+}
+.loot-card .card-name {
+    font-size: 9px;
+    color: var(--text-main);
+    letter-spacing: 1px;
+    text-align: center;
+    line-height: 1.2;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.loot-card .card-qty {
+    position: absolute;
+    right: 2px;
+    bottom: 0;
+    font-size: 9px;
+    color: #e8eef2;
+    background: rgba(0,0,0,0.7);
+    padding: 0 3px;
+    font-variant-numeric: tabular-nums;
+}
+.loot-card .card-value {
+    font-size: 8px;
+    color: var(--text-dim);
+    letter-spacing: 1px;
+    font-variant-numeric: tabular-nums;
+}
+.loot-card .card-density {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+}
+.loot-card.kind-weapon { border-color: rgba(168, 104, 144, 0.45); }
+.loot-card.kind-armor  { border-color: rgba(180, 200, 220, 0.4); }
+.loot-card.kind-loot   { box-shadow: 0 0 8px rgba(216, 164, 92, 0.2) inset; }
+.loot-card.kind-consumable { border-color: rgba(216, 164, 92, 0.35); }
+.loot-card.kind-ammo   { border-color: rgba(94, 200, 224, 0.3); }
+.loot-card.rare {
+    box-shadow: 0 0 10px rgba(168, 104, 144, 0.5),
+                0 0 18px rgba(168, 104, 144, 0.2) inset;
+    border-color: rgba(168, 104, 144, 0.7);
+}
+
+.loot-detail {
+    padding: 10px 16px;
+    border-top: 1px dashed rgba(94, 200, 224, 0.22);
+    min-height: 56px;
+    font-size: 11px;
+    color: var(--text-main);
+    letter-spacing: 1px;
+    line-height: 1.5;
+}
+.loot-detail-empty {
+    color: var(--text-dim);
+    font-style: italic;
+}
+.loot-detail-name {
+    color: var(--warm-amber);
+    font-size: 12px;
+    letter-spacing: 2px;
+    margin-bottom: 4px;
+}
+.loot-detail-stat { display: inline-block; margin-right: 14px; }
+.loot-detail-stat b { color: var(--neon-cyan); font-variant-numeric: tabular-nums; }
+.loot-detail-desc { color: var(--text-dim); font-size: 10px; margin-top: 4px; font-style: italic; }
+
+.loot-actions {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 16px;
+    border-top: 1px solid rgba(94, 200, 224, 0.15);
+    background: rgba(0, 0, 0, 0.3);
+}
+.loot-sorts { display: flex; gap: 6px; }
+.loot-sort-btn {
+    background: transparent;
+    border: 1px solid rgba(94, 200, 224, 0.25);
+    color: var(--text-dim);
+    padding: 4px 10px;
+    font-size: 10px;
+    letter-spacing: 1px;
+    cursor: pointer;
+    font-family: inherit;
+    transition: all 0.15s ease;
+}
+.loot-sort-btn:hover { color: var(--text-main); border-color: var(--neon-cyan); }
+.loot-sort-btn.active {
+    color: var(--neon-cyan);
+    border-color: var(--neon-cyan);
+    background: rgba(94, 200, 224, 0.1);
+    text-shadow: 0 0 6px rgba(94, 200, 224, 0.5);
+}
+.loot-pick-all {
+    background: rgba(216, 164, 92, 0.12);
+    border: 1px solid var(--warm-amber);
+    color: var(--warm-amber);
+    padding: 6px 16px;
+    font-size: 11px;
+    letter-spacing: 2px;
+    cursor: pointer;
+    font-family: inherit;
+    transition: all 0.15s ease;
+    text-shadow: 0 0 4px rgba(216, 164, 92, 0.4);
+}
+.loot-pick-all:hover {
+    background: rgba(216, 164, 92, 0.22);
+    box-shadow: 0 0 12px rgba(216, 164, 92, 0.4);
+}
+.loot-pick-all:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+/* 容器类型差异化视觉提示（地图上绘制时配合） */
+.loot-window.cache-mode {
+    border-color: var(--neon-cyan);
+}
+.loot-window.cache-mode #loot-panel {
+    box-shadow: 0 0 40px rgba(94, 200, 224, 0.5),
+                0 0 80px rgba(94, 200, 224, 0.2) inset;
+}

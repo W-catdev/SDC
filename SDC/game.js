@@ -285,7 +285,9 @@ const ITEM_TYPES = {
     'w_sniper':  { label: '狙击枪', color: '#d8dfe5', weight: 5.0, value: 220, kind: 'weapon', weaponKey: 'sniper' },
     'w_grenade': { label: '榴弹发射器', color: '#d8dfe5', weight: 2.8, value: 160, kind: 'weapon', weaponKey: 'grenade' },
     'armor_t1':  { label: '战术护甲', color: '#a0b0c0', weight: 2.5, value: 70, kind: 'armor', reduction: 0.35 },
-    'armor_t2':  { label: '重型护甲', color: '#d8d8d8', weight: 4.0, value: 140, kind: 'armor', reduction: 0.55 }
+    'armor_t2':  { label: '重型护甲', color: '#d8d8d8', weight: 4.0, value: 140, kind: 'armor', reduction: 0.55 },
+    // === v1.7 LOOT-UI 新增：解码芯片（金库钥匙） ===
+    'decoder':  { label: '解码芯片', color: C.neonCyan, weight: 0.1, value: 50, kind: 'loot', qty: 1 }
 };
 
 // -------------------- 手雷类型定义 --------------------
@@ -344,6 +346,81 @@ function rollLoot(n) {
         let r = Math.random() * totalW;
         for (const p of LOOT_POOL) {
             if ((r -= p.weight) <= 0) { out.push({ key: p.key, qty: randi(p.qty[0], p.qty[1] + 1) }); break; }
+        }
+    }
+    return out;
+}
+
+// === v1.7 LOOT-UI：按容器类型分池产出 ===
+const CONTAINER_LOOT_POOLS = {
+    crate: [
+        { key: '9mm',     qty: [3, 9],  weight: 18 },
+        { key: 'med',     qty: [1, 2],  weight: 10 },
+        { key: 'food',    qty: [1, 2],  weight: 9 },
+        { key: 'chip',    qty: [1, 3],  weight: 11 },
+        { key: 'battery', qty: [1, 1],  weight: 6 },
+        { key: 'rare',    qty: [1, 1],  weight: 3 },
+        { key: 'armor_t1',qty: [1, 1],  weight: 2 }
+    ],
+    vending: [
+        { key: 'food',    qty: [1, 2],  weight: 18 },
+        { key: 'med',     qty: [1, 1],  weight: 18 },
+        { key: '9mm',     qty: [3, 6],  weight: 14 },
+        { key: 'rifle',   qty: [2, 4],  weight: 8 },
+        { key: 'shotgun', qty: [1, 3],  weight: 6 }
+    ],
+    debris: [
+        { key: 'chip',    qty: [1, 2],  weight: 22 },
+        { key: 'battery', qty: [1, 2],  weight: 18 },
+        { key: 'food',    qty: [1, 1],  weight: 12 },
+        { key: 'rare',    qty: [1, 1],  weight: 8 },
+        { key: 'decoder', qty: [1, 1],  weight: 5 },
+        { key: 'armor_t2',qty: [1, 1],  weight: 3 }
+    ],
+    cache: [
+        { key: 'w_rifle',    qty: [1, 1], weight: 25 },
+        { key: 'w_sniper',   qty: [1, 1], weight: 15 },
+        { key: 'w_shotgun',  qty: [1, 1], weight: 15 },
+        { key: 'armor_t2',   qty: [1, 1], weight: 20 },
+        { key: 'rare',       qty: [3, 5], weight: 25 }
+    ],
+    corpse: [
+        { key: 'w_rifle',    qty: [1, 1], weight: 18 },
+        { key: '9mm',        qty: [10,25],weight: 22 },
+        { key: 'med',        qty: [1, 3], weight: 12 },
+        { key: 'food',       qty: [1, 2], weight: 8 },
+        { key: 'chip',       qty: [2, 4], weight: 14 },
+        { key: 'armor_t1',   qty: [1, 1], weight: 10 },
+        { key: 'rare',       qty: [1, 2], weight: 8 },
+        { key: 'grenade',    qty: [1, 2], weight: 8 }
+    ]
+};
+const CONTAINER_COUNT_RANGE = {
+    crate:   [2, 4],
+    vending: [1, 2],
+    debris:  [2, 3],
+    cache:   [1, 1],
+    corpse:  [5, 7]
+};
+
+function rollLootByType(type) {
+    const pool = CONTAINER_LOOT_POOLS[type] || CONTAINER_LOOT_POOLS.crate;
+    const range = CONTAINER_COUNT_RANGE[type] || [2, 4];
+    const n = randi(range[0], range[1] + 1);
+    const totalW = pool.reduce((s, p) => s + p.weight, 0);
+    const out = [];
+    for (let i = 0; i < n; i++) {
+        let r = Math.random() * totalW;
+        for (const p of pool) {
+            if ((r -= p.weight) <= 0) {
+                out.push({
+                    uid: 'loot_' + Math.random().toString(36).slice(2, 9),
+                    defKey: p.key,
+                    qty: randi(p.qty[0], p.qty[1] + 1),
+                    picked: false
+                });
+                break;
+            }
         }
     }
     return out;
@@ -409,7 +486,9 @@ const G = {
     dynamicDiff: { level: 1.0, killsInWindow: 0, damageTaken: 0, windowStart: 0 },
     // === v1.3.x 物理/环境互动 ===
     barrels: [],
-    doorQTE: null
+    doorQTE: null,
+    // === v1.7 LOOT-UI 状态 ===
+    lootWindow: null   // 拾取界面状态 { state, containerId, containerRef, items, hoverUid, sortBy }
 };
 
 // === 仓库（跨局持久） ===
@@ -1204,22 +1283,37 @@ function createPlayer() {
 
 // -------------------- 世界实体 --------------------
 
-// 搜刮容器
-function createContainer(x, y) {
-    const kinds = [
-        { label: '生锈货箱', w: 60, h: 44, color: '#4a3f33' },
-        { label: '废弃售货机', w: 46, h: 70, color: '#3c4854' },
-        { label: '废墟堆', w: 80, h: 50, color: '#3a3b40' },
-        { label: '补给箱', w: 54, h: 40, color: '#504030' }
-    ];
-    const kind = kinds[randi(0, kinds.length)];
+// 搜刮容器（v1.7 LOOT-UI 重构：支持 type 参数、差异化外观、锁类型）
+function createContainer(x, y, type = null) {
+    // === v1.7 LOOT-UI：容器类型定义 ===
+    const kinds = {
+        crate:   { label: '生锈货箱',   w: 60, h: 44, color: '#4a3f33', icon: '📦', lock: 'none',    isNeon: false },
+        vending: { label: '废弃售货机', w: 46, h: 70, color: '#3c4854', icon: '🏧', lock: 'none',    isNeon: false },
+        debris:  { label: '废墟堆',     w: 80, h: 50, color: '#3a3b40', icon: '⛏',  lock: 'none',    isNeon: false },
+        cache:   { label: '霓虹金库',   w: 40, h: 40, color: '#1e2a30', icon: '💎', lock: 'decoder', isNeon: true  },
+        corpse:  { label: '拾荒者遗骸', w: 50, h: 30, color: '#3a2a2a', icon: '☠',  lock: 'none',    isNeon: false }
+    };
+    if (!type) {
+        const r = hash2d(x, y, 42);
+        if (r < 0.55) type = 'crate';
+        else if (r < 0.8) type = 'vending';
+        else type = 'debris';
+    }
+    const kind = kinds[type] || kinds.crate;
     return {
+        id: 'cont_' + Math.random().toString(36).slice(2, 9),
+        type,
         x, y, w: kind.w, h: kind.h,
         color: kind.color,
         label: kind.label,
+        icon: kind.icon,
         opened: false,
-        lootCount: randi(3, 6),  // 打开后散落在地上的物品数量
-        lootLeft: 0,             // 打开后未被拾取的物品数
+        contents: [],          // v1.7 搜刮后填入的物品列表
+        searched: false,
+        lockType: kind.lock,
+        isNeon: kind.isNeon,
+        lootCount: 0,
+        lootLeft: 0,
         isContainer: true
     };
 }
@@ -1472,6 +1566,42 @@ function initWorld() {
             }
         }
         if (ok) G.containers.push(createContainer(x, y));
+    }
+
+    // === v1.7 LOOT-UI: 隐藏霓虹金库（1-2 个，远离玩家） ===
+    const cacheCount = 1 + (hash2d(G.player.x, G.player.y, 88) < 0.5 ? 1 : 0);
+    for (let i = 0; i < cacheCount; i++) {
+        let x, y, ok = false, tries = 0;
+        while (!ok && tries++ < 100) {
+            x = rand(500, WORLD.w - 500);
+            y = rand(500, WORLD.h - 500);
+            if (dist({x, y}, G.player) < 900) continue; // 远离开局但可达
+            ok = true;
+            for (const c of G.containers) {
+                if (Math.abs(c.x - x) < 90 && Math.abs(c.y - y) < 90) { ok = false; break; }
+            }
+        }
+        if (ok) G.containers.push(createContainer(x, y, 'cache'));
+    }
+
+    // === v1.7 LOOT-UI: 拾荒者遗骸（2-3 个，模拟 PvP 体验） ===
+    const corpseCount = 2 + randi(0, 2);
+    for (let i = 0; i < corpseCount; i++) {
+        let x, y, ok = false, tries = 0;
+        while (!ok && tries++ < 80) {
+            x = rand(400, WORLD.w - 400);
+            y = rand(400, WORLD.h - 400);
+            if (dist({x, y}, G.player) < 600) continue;
+            ok = true;
+            for (const c of G.containers) {
+                if (Math.abs(c.x - x) < 90 && Math.abs(c.y - y) < 90) { ok = false; break; }
+            }
+        }
+        if (ok) {
+            const c = createContainer(x, y, 'corpse');
+            // 关联一个埋伏敌人（v1.7 模拟 PvP）
+            G.containers.push(c);
+        }
     }
 
     // 敌人 — 稀疏分布（搜打撤风格：地图大、敌人少、有巡逻节奏）
@@ -1746,7 +1876,17 @@ function tryInteract() {
         const d = dist(p, c);
         if (d < 70 && d < best) { best = d; nearestC = c; }
     }
-    if (nearestC && !G.looting) {
+    if (nearestC && !G.looting && !G.lootWindow) {
+        // === v1.7 LOOT-UI: 金库解码芯片检查 ===
+        if (nearestC.lockType === 'decoder') {
+            const has = (p.inventory.decoder || 0) > 0;
+            if (!has) {
+                if (typeof showHint === 'function') showHint('需解码芯片', 1500);
+                else if (typeof G !== 'undefined' && G.interactHint !== undefined) G.interactHint = '需解码芯片';
+                return;
+            }
+            p.inventory.decoder -= 1;
+        }
         // 开始搜刮动画：1.2 秒后完成
         G.looting = { container: nearestC, startAt: now, duration: 1200 };
     }
@@ -1797,28 +1937,20 @@ function updateLooting(now) {
 
 function openContainer(c) {
     c.opened = true;
-    // 根据容器大小决定产出
-    const n = randi(3, 6);
-    const loot = rollLoot(n);
-    c.lootLeft = loot.length;
-    // 把物品散落在容器周围
-    const baseAngle = rand(0, Math.PI * 2);
-    loot.forEach((item, i) => {
-        const ang = baseAngle + (i / loot.length) * Math.PI * 2 + rand(-0.3, 0.3);
-        const rr = rand(55, 90);
-        const ix = c.x + Math.cos(ang) * rr;
-        const iy = c.y + Math.sin(ang) * rr;
-        G.groundItems.push(createGroundItem(ix, iy, item.key, item.qty));
-    });
-    // === 视觉增强：多层粒子爆发 + 震屏 ===
-    // 主爆发：琥珀色尘埃
+    c.searched = true;
+    // === v1.7 LOOT-UI：按容器类型分池产出 + 填充到 contents（不散落地面） ===
+    c.contents = rollLootByType(c.type);
+    c.lootLeft = c.contents.length;
+
+    // === 视觉增强：多层粒子爆发 + 震屏（保留） ===
     spawnParticles(c.x, c.y, C.amber, 28, 160);
-    // 外层白色高光
     spawnParticles(c.x, c.y, '#ffffff', 10, 200);
-    // 暗角
     spawnParticles(c.x, c.y, '#8a5a2a', 16, 120);
     G.camera.shake = Math.min(G.camera.shake + 8, 16);
     Sound.loot();
+
+    // === v1.7 LOOT-UI：弹出拾取界面 ===
+    showLootWindow(c);
 }
 
 function pickupItem(groundItem) {
@@ -1876,6 +2008,199 @@ function pickupItem(groundItem) {
     Sound.pickup();
     spawnParticles(groundItem.x, groundItem.y, def.color, 10, 90);
     G.groundItems = G.groundItems.filter(x => x !== groundItem);
+}
+
+// =====================================================
+// v1.7 LOOT-UI: 战局内搜刮拾取界面
+// =====================================================
+function showLootWindow(c) {
+    G.lootWindow = {
+        state: 'open',
+        containerId: c.id,
+        containerRef: c,
+        items: c.contents,
+        hoverUid: null,
+        sortBy: 'density'
+    };
+    const el = document.getElementById('loot-window');
+    if (!el) return;
+    el.classList.remove('hidden');
+    // 金库特殊样式
+    el.classList.toggle('cache-mode', c.type === 'cache');
+    document.getElementById('loot-icon').textContent = c.icon;
+    document.getElementById('loot-title-text').textContent = c.label;
+    document.getElementById('loot-count').textContent = `${c.contents.length} 件物品`;
+    // 解码芯片提示
+    if (c.type === 'cache') {
+        const note = document.createElement('div');
+        note.style.cssText = 'color:var(--neon-cyan); font-size:9px; letter-spacing:1px; text-shadow:0 0 6px rgba(94,200,224,0.5);';
+        note.textContent = '◆ 霓虹金库';
+    }
+    renderLootWindow();
+}
+
+function hideLootWindow() {
+    const el = document.getElementById('loot-window');
+    if (!el) return;
+    el.classList.add('hidden');
+    el.classList.remove('cache-mode');
+    if (G.lootWindow) G.lootWindow = null;
+}
+
+function renderLootWindow() {
+    if (!G.lootWindow) return;
+    const w = G.lootWindow;
+    const grid = document.getElementById('loot-grid');
+    if (!grid) return;
+    grid.innerHTML = '';
+
+    // 排序副本
+    const items = w.items.slice();
+    const sortFns = {
+        value: (a, b) => {
+            const da = (ITEM_TYPES[a.defKey] && ITEM_TYPES[a.defKey].value || 0) * a.qty;
+            const db = (ITEM_TYPES[b.defKey] && ITEM_TYPES[b.defKey].value || 0) * b.qty;
+            return db - da;
+        },
+        weight: (a, b) => {
+            const wa = ITEM_TYPES[a.defKey] && ITEM_TYPES[a.defKey].weight || 0;
+            const wb = ITEM_TYPES[b.defKey] && ITEM_TYPES[b.defKey].weight || 0;
+            return wa - wb;
+        },
+        density: (a, b) => {
+            const da = densityOf(a), db = densityOf(b);
+            return db - da;
+        }
+    };
+    items.sort(sortFns[w.sortBy] || sortFns.density);
+
+    for (const it of items) {
+        const def = ITEM_TYPES[it.defKey];
+        if (!def) continue;
+        const card = document.createElement('div');
+        const density = densityOf(it);
+        const densityColor = density >= 50 ? '#7aaa6a' : density >= 20 ? '#d8a45c' : '#b85a6e';
+        const kindClass = def.kind ? `kind-${def.kind}` : '';
+        const isRare = def.kind === 'weapon' || def.kind === 'armor' && def.value >= 100 || def.value >= 100;
+        card.className = `loot-card ${kindClass} ${it.picked ? 'picked' : ''} ${isRare ? 'rare' : ''}`;
+        card.dataset.uid = it.uid;
+        const iconHtml = def.icon ? `<div class="card-icon">${def.icon}</div>` : `<div class="card-icon">${def.label.slice(0, 1)}</div>`;
+        card.innerHTML = `
+            <div class="card-density" style="background:${densityColor}"></div>
+            ${iconHtml}
+            <div class="card-name">${def.label}</div>
+            <div class="card-value">${def.value * it.qty} 点</div>
+            ${it.qty > 1 ? `<div class="card-qty">×${it.qty}</div>` : ''}
+        `;
+        card.addEventListener('click', () => pickLootItem(it.uid));
+        card.addEventListener('mouseenter', () => showLootDetail(it));
+        grid.appendChild(card);
+    }
+
+    // sort 按钮状态
+    document.querySelectorAll('.loot-sort-btn').forEach(b => {
+        b.classList.toggle('active', b.dataset.sort === w.sortBy);
+    });
+
+    // 全部拾取按钮禁用状态
+    const allPicked = w.items.every(it => it.picked);
+    const pa = document.getElementById('loot-pick-all');
+    if (pa) pa.disabled = allPicked;
+}
+
+function densityOf(it) {
+    const def = ITEM_TYPES[it.defKey];
+    if (!def || !def.weight) return 0;
+    return def.value / Math.max(0.01, def.weight);
+}
+
+function showLootDetail(it) {
+    if (!G.lootWindow) return;
+    const def = ITEM_TYPES[it.defKey];
+    if (!def) return;
+    const detail = document.getElementById('loot-detail');
+    if (!detail) return;
+    const density = densityOf(it).toFixed(1);
+    const densityColor = densityOf(it) >= 50 ? 'var(--warm-amber)' : 'var(--text-dim)';
+    detail.innerHTML = `
+        <div class="loot-detail-name">${def.label}</div>
+        <div>
+            <span class="loot-detail-stat">价值 <b>${def.value * it.qty}</b> 点</span>
+            <span class="loot-detail-stat">重量 <b>${(def.weight * it.qty).toFixed(2)}</b> kg</span>
+            <span class="loot-detail-stat" style="color:${densityColor}">密度 <b>${density}</b></span>
+            <span class="loot-detail-stat">种类 <b>${def.kind || '杂项'}</b></span>
+        </div>
+        <div class="loot-detail-desc">${def.label} · 战前时代的遗物，仍有使用价值。</div>
+    `;
+}
+
+function pickLootItem(uid) {
+    if (!G.lootWindow) return;
+    const w = G.lootWindow;
+    const it = w.items.find(x => x.uid === uid);
+    if (!it || it.picked) return;
+
+    const def = ITEM_TYPES[it.defKey];
+    if (!def) return;
+
+    const p = G.player;
+
+    // 武器 → 进武器栏；其他 → 进 inventory
+    if (def.kind === 'weapon') {
+        let slot = p.weapons.findIndex(x => x === null);
+        if (slot < 0) slot = 0; // 替换槽 0
+        p.weapons[slot] = { ...def };
+        p.weapons[slot].ammo = p.weapons[slot].ammo || 12;
+        p.weapons[slot].ammoMax = p.weapons[slot].ammoMax || 12;
+        p.weapons[slot].durability = 100;
+    } else if (def.kind === 'armor') {
+        p.armor = { key: it.defKey, ...def };
+    } else {
+        p.inventory[it.defKey] = (p.inventory[it.defKey] || 0) + it.qty;
+        p.weight += def.weight * it.qty;
+    }
+
+    G.lootValue += def.value * it.qty;
+    it.picked = true;
+    if (typeof Sound !== 'undefined' && Sound.loot) Sound.loot();
+    if (typeof spawnParticles === 'function') {
+        spawnParticles(p.x, p.y, def.color, 8, 80);
+    }
+    renderLootWindow();
+    // 关闭界面（全部拾取完则自动关）
+    const allPicked = w.items.every(x => x.picked);
+    if (allPicked) {
+        setTimeout(hideLootWindow, 300);
+    }
+}
+
+function pickAllLootItems() {
+    if (!G.lootWindow) return;
+    for (const it of G.lootWindow.items) {
+        if (!it.picked) pickLootItem(it.uid);
+    }
+}
+
+function sortLootItems(by) {
+    if (!G.lootWindow) return;
+    G.lootWindow.sortBy = by;
+    renderLootWindow();
+}
+
+// 初始化拾取界面事件（仅在 DOM 加载后绑定一次）
+function initLootWindowEvents() {
+    const close = document.getElementById('loot-close');
+    if (close) close.addEventListener('click', hideLootWindow);
+    const pickAll = document.getElementById('loot-pick-all');
+    if (pickAll) pickAll.addEventListener('click', pickAllLootItems);
+    document.querySelectorAll('.loot-sort-btn').forEach(btn => {
+        btn.addEventListener('click', () => sortLootItems(btn.dataset.sort));
+    });
+    const grid = document.getElementById('loot-grid');
+    if (grid) grid.addEventListener('mouseleave', () => {
+        const detail = document.getElementById('loot-detail');
+        if (detail) detail.innerHTML = '<span class="loot-detail-empty">悬停物品查看详情</span>';
+    });
 }
 
 // -------------------- 射击 --------------------
@@ -6745,6 +7070,26 @@ document.addEventListener('keydown', (e) => {
 loadStash();
 // 初始：刷新开始界面的仓库预览（让用户看到"你有一个手无寸铁的拾荒者"）
 refreshStartMiniPanel();
+
+// === v1.7 LOOT-UI: 绑定拾取界面事件（DOM 加载后） ===
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initLootWindowEvents);
+} else {
+    initLootWindowEvents();
+}
+
+// === v1.7 LOOT-UI: 拾取界面快捷键（ESC 关闭、Space 全部拾取） ===
+document.addEventListener('keydown', (e) => {
+    if (G && G.lootWindow && G.lootWindow.state === 'open') {
+        if (e.key === 'Escape') {
+            hideLootWindow();
+            e.preventDefault();
+        } else if (e.key === ' ' || e.code === 'Space') {
+            pickAllLootItems();
+            e.preventDefault();
+        }
+    }
+});
 
 function loop(now) {
     update(now);

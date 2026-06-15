@@ -149,6 +149,32 @@
             </div>
         </div>
 
+        <!-- ========= 战局内搜刮拾取界面 (v1.7) ========= -->
+        <div id="loot-window" class="loot-window hidden" aria-hidden="true">
+            <div id="loot-panel">
+                <div class="loot-header">
+                    <div class="loot-title">
+                        <span id="loot-icon" class="loot-icon">📦</span>
+                        <span id="loot-title-text">生锈货箱</span>
+                        <span id="loot-count" class="loot-count">0 件物品</span>
+                    </div>
+                    <button id="loot-close" class="loot-close" aria-label="关闭">[ESC] 关闭</button>
+                </div>
+                <div id="loot-grid" class="loot-grid"></div>
+                <div id="loot-detail" class="loot-detail">
+                    <span class="loot-detail-empty">悬停物品查看详情</span>
+                </div>
+                <div class="loot-actions">
+                    <div class="loot-sorts">
+                        <button class="loot-sort-btn active" data-sort="density">价值密度</button>
+                        <button class="loot-sort-btn" data-sort="value">价值</button>
+                        <button class="loot-sort-btn" data-sort="weight">重量</button>
+                    </div>
+                    <button id="loot-pick-all" class="loot-pick-all">[Space] 全部拾取</button>
+                </div>
+            </div>
+        </div>
+
         <!-- ========= 库存 / 装备管理页（TAB） ========= -->
         <div id="inventory-overlay" class="overlay hidden">
             <div id="inventory-panel">
