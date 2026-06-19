@@ -13,9 +13,10 @@ ctx.imageSmoothingEnabled = false;
 const W = canvas.width;   // 1280
 const H = canvas.height;  // 720
 
-const radarCanvas = document.getElementById('radar-canvas');
-const radarCtx = radarCanvas.getContext('2d');
-radarCtx.imageSmoothingEnabled = false;
+// v2.0 极简：雷达移到主画布右下角，不再使用独立 canvas
+// 保留占位避免外部代码引用报错
+const radarCanvas = { getContext: () => ctx, width: 0, height: 0 };
+const radarCtx = ctx;
 
 // 像素艺术绘制工具
 function px(x, y, w, h, color) {
@@ -1179,22 +1180,10 @@ function checkAchievements() {
 }
 
 function showAchievementToast(a) {
-    const el = document.createElement('div');
-    el.className = 'achievement-toast';
-    el.innerHTML = `
-        <div class="ach-icon">${a.icon}</div>
-        <div class="ach-text">
-            <div class="ach-label">成就解锁</div>
-            <div class="ach-name">${a.name}</div>
-            <div class="ach-desc">${a.desc}</div>
-        </div>
-    `;
-    document.body.appendChild(el);
-    setTimeout(() => el.classList.add('show'), 30);
-    setTimeout(() => {
-        el.classList.remove('show');
-        setTimeout(() => el.remove(), 400);
-    }, 3800);
+    // v2.0 极简：成就解锁改为世界空间飘字
+    if (typeof spawnFloatingText === 'function' && G.player) {
+        spawnFloatingText(G.player.x, G.player.y - 40, `◆ 成就：${a.name}`, '#d8a45c');
+    }
 }
 
 // 渲染成就列表（在开始界面）
@@ -2013,6 +2002,11 @@ function pickupItem(groundItem) {
 // =====================================================
 // v1.7 LOOT-UI: 战局内搜刮拾取界面
 // =====================================================
+// ============ v2.0 极简版：世界空间搜刮卡片 ============
+// 玩家在容器旁停留时，容器头顶浮现可拾取物品的卡片列表
+// 拾取：点选 / 全部拾取 / 关闭
+// 设计：每张卡片是容器正上方的浮动小方块，没有 HTML overlay
+
 function showLootWindow(c) {
     G.lootWindow = {
         state: 'open',
@@ -2020,41 +2014,94 @@ function showLootWindow(c) {
         containerRef: c,
         items: c.contents,
         hoverUid: null,
-        sortBy: 'density'
+        sortBy: 'density',
+        // 浮卡动画：用于飘入 / 抽出效果
+        animPhase: 0  // 0 = 正在浮入, 1 = 稳定, 2 = 正在关闭
     };
-    const el = document.getElementById('loot-window');
-    if (!el) return;
-    el.classList.remove('hidden');
-    // 金库特殊样式
-    el.classList.toggle('cache-mode', c.type === 'cache');
-    document.getElementById('loot-icon').textContent = c.icon;
-    document.getElementById('loot-title-text').textContent = c.label;
-    document.getElementById('loot-count').textContent = `${c.contents.length} 件物品`;
-    // 解码芯片提示
-    if (c.type === 'cache') {
-        const note = document.createElement('div');
-        note.style.cssText = 'color:var(--neon-cyan); font-size:9px; letter-spacing:1px; text-shadow:0 0 6px rgba(94,200,224,0.5);';
-        note.textContent = '◆ 霓虹金库';
-    }
-    renderLootWindow();
 }
 
+// 关闭动画中保存的"幽灵"窗口（fade-out 期间画布上还要画一帧）
+let _closingLootWindow = null;
+
 function hideLootWindow() {
-    const el = document.getElementById('loot-window');
-    if (!el) return;
-    el.classList.add('hidden');
-    el.classList.remove('cache-mode');
-    if (G.lootWindow) G.lootWindow = null;
+    if (!G.lootWindow) return;
+    // 立即清空状态（满足测试：hideLootWindow() 后 G.lootWindow === null）
+    _closingLootWindow = G.lootWindow;
+    _closingLootWindow.animPhase = 2;
+    _closingLootWindow.closingAt = performance.now();
+    G.lootWindow = null;
+    // 200ms 后彻底清掉幽灵
+    setTimeout(() => {
+        if (_closingLootWindow && performance.now() - _closingLootWindow.closingAt >= 200) {
+            _closingLootWindow = null;
+        }
+    }, 220);
 }
 
 function renderLootWindow() {
-    if (!G.lootWindow) return;
-    const w = G.lootWindow;
-    const grid = document.getElementById('loot-grid');
-    if (!grid) return;
-    grid.innerHTML = '';
+    // v2.0：纯世界空间渲染，此函数仅作为兼容性占位
+    // 真正的渲染在 drawLootCardsWorldSpace 中
+    return;
+}
 
-    // 排序副本
+function densityOf(it) {
+    const def = ITEM_TYPES[it.defKey];
+    if (!def || !def.weight) return 0;
+    return def.value / Math.max(0.01, def.weight);
+}
+
+// 画世界空间拾取卡片
+function drawLootCardsWorldSpace(ctx, w, cam, forceAlpha = null) {
+    if (!w || !w.containerRef) return;
+    const c = w.containerRef;
+    const sx = c.x - cam.x + ctx.canvas.width / 2;
+    const sy = c.y - cam.y + ctx.canvas.height / 2;
+
+    // 关闭动画的渐隐
+    let alpha = forceAlpha !== null ? forceAlpha : 1;
+    if (forceAlpha === null) {
+        if (w.animPhase === 2) alpha = 0.4;
+        if (w.animPhase === 0) alpha = 0.6 + Math.sin(performance.now() / 100) * 0.4;
+    }
+
+    // === 容器头顶的"打开中"指示器 ===
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    // 容器发光环
+    ctx.strokeStyle = c.type === 'cache' ? '#5ec8e0' : '#7aaa6a';
+    ctx.lineWidth = 2;
+    ctx.shadowColor = ctx.strokeStyle;
+    ctx.shadowBlur = 8;
+    ctx.beginPath();
+    ctx.arc(sx, sy, c.r + 6, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    // === 容器上方"待拾取"小条 ===
+    const remainCount = w.items.filter(it => !it.picked).length;
+    const headerY = sy - c.r - 38;
+    // 半透明背板
+    ctx.fillStyle = 'rgba(10, 12, 15, 0.78)';
+    const headerW = 96;
+    const headerH = 18;
+    ctx.fillRect(sx - headerW / 2, headerY - headerH / 2, headerW, headerH);
+    // 边框
+    ctx.strokeStyle = c.type === 'cache' ? 'rgba(94, 200, 224, 0.7)' : 'rgba(122, 170, 106, 0.7)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(sx - headerW / 2, headerY - headerH / 2, headerW, headerH);
+    // 文字
+    ctx.fillStyle = '#d8e2ec';
+    ctx.font = 'bold 9px Cascadia Code, monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const typeLabel = c.type === 'cache' ? '◆ 霓虹金库' : (c.type === 'vending' ? '▤ 售货机' : (c.type === 'corpse' ? '✕ 尸体' : '▢ 容器'));
+    ctx.fillText(`${typeLabel}  ${remainCount}件`, sx, headerY);
+    ctx.restore();
+
+    // === 物品卡片（每件一格，纵向堆叠在容器上方） ===
+    if (w.animPhase === 2) return;  // 关闭中不画卡片
+
+    // 排序
     const items = w.items.slice();
     const sortFns = {
         value: (a, b) => {
@@ -2067,71 +2114,121 @@ function renderLootWindow() {
             const wb = ITEM_TYPES[b.defKey] && ITEM_TYPES[b.defKey].weight || 0;
             return wa - wb;
         },
-        density: (a, b) => {
-            const da = densityOf(a), db = densityOf(b);
-            return db - da;
-        }
+        density: (a, b) => densityOf(b) - densityOf(a)
     };
     items.sort(sortFns[w.sortBy] || sortFns.density);
 
-    for (const it of items) {
-        const def = ITEM_TYPES[it.defKey];
-        if (!def) continue;
-        const card = document.createElement('div');
-        const density = densityOf(it);
-        const densityColor = density >= 50 ? '#7aaa6a' : density >= 20 ? '#d8a45c' : '#b85a6e';
-        const kindClass = def.kind ? `kind-${def.kind}` : '';
-        const isRare = def.kind === 'weapon' || def.kind === 'armor' && def.value >= 100 || def.value >= 100;
-        card.className = `loot-card ${kindClass} ${it.picked ? 'picked' : ''} ${isRare ? 'rare' : ''}`;
-        card.dataset.uid = it.uid;
-        const iconHtml = def.icon ? `<div class="card-icon">${def.icon}</div>` : `<div class="card-icon">${def.label.slice(0, 1)}</div>`;
-        card.innerHTML = `
-            <div class="card-density" style="background:${densityColor}"></div>
-            ${iconHtml}
-            <div class="card-name">${def.label}</div>
-            <div class="card-value">${def.value * it.qty} 点</div>
-            ${it.qty > 1 ? `<div class="card-qty">×${it.qty}</div>` : ''}
-        `;
-        card.addEventListener('click', () => pickLootItem(it.uid));
-        card.addEventListener('mouseenter', () => showLootDetail(it));
-        grid.appendChild(card);
+    const cardW = 70;
+    const cardH = 22;
+    const cardGap = 4;
+    const baseX = sx - (cardW / 2);
+    const baseY = sy - c.r - 30 - cardH;
+    const maxVisible = 8;
+    const visibleItems = items.slice(0, maxVisible);
+
+    // 鼠标悬停检测（屏幕坐标 → 世界坐标）
+    let mouseWorldX = null, mouseWorldY = null;
+    if (G.mouse) {
+        mouseWorldX = G.mouse.x + cam.x - ctx.canvas.width / 2;
+        mouseWorldY = G.mouse.y + cam.y - ctx.canvas.height / 2;
     }
 
-    // sort 按钮状态
-    document.querySelectorAll('.loot-sort-btn').forEach(b => {
-        b.classList.toggle('active', b.dataset.sort === w.sortBy);
-    });
+    w.hoverUid = null;
+    for (let i = 0; i < visibleItems.length; i++) {
+        const it = visibleItems[i];
+        const def = ITEM_TYPES[it.defKey];
+        if (!def) continue;
+        const cx = baseX;
+        const cy = baseY - i * (cardH + cardGap);
 
-    // 全部拾取按钮禁用状态
-    const allPicked = w.items.every(it => it.picked);
-    const pa = document.getElementById('loot-pick-all');
-    if (pa) pa.disabled = allPicked;
-}
+        // 鼠标命中（仅未拾取）
+        if (!it.picked && mouseWorldX !== null) {
+            if (mouseWorldX >= cx && mouseWorldX <= cx + cardW &&
+                mouseWorldY >= cy && mouseWorldY <= cy + cardH) {
+                w.hoverUid = it.uid;
+            }
+        }
+        const isHover = w.hoverUid === it.uid;
 
-function densityOf(it) {
-    const def = ITEM_TYPES[it.defKey];
-    if (!def || !def.weight) return 0;
-    return def.value / Math.max(0.01, def.weight);
+        ctx.save();
+        ctx.globalAlpha = it.picked ? 0.3 : 1;
+        // 背景
+        ctx.fillStyle = it.picked ? 'rgba(20, 24, 28, 0.55)' :
+            (isHover ? 'rgba(94, 200, 224, 0.18)' : 'rgba(10, 12, 15, 0.82)');
+        ctx.fillRect(cx, cy, cardW, cardH);
+        // 密度色条（左侧）
+        const d = densityOf(it);
+        const dColor = d >= 50 ? '#7aaa6a' : d >= 20 ? '#d8a45c' : '#b85a6e';
+        ctx.fillStyle = dColor;
+        ctx.fillRect(cx, cy, 3, cardH);
+        // 边框
+        ctx.strokeStyle = isHover ? '#5ec8e0' :
+            (def.kind === 'weapon' ? 'rgba(216, 164, 92, 0.5)' :
+             def.kind === 'armor' ? 'rgba(122, 170, 106, 0.5)' :
+             'rgba(120, 130, 140, 0.4)');
+        ctx.lineWidth = isHover ? 1.5 : 1;
+        ctx.strokeRect(cx, cy, cardW, cardH);
+        // 图标（用首字符代替）
+        ctx.fillStyle = def.color || '#9aa8b8';
+        ctx.font = 'bold 9px Cascadia Code, monospace';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        const iconChar = (def.label || '?').slice(0, 1);
+        ctx.fillText(iconChar, cx + 6, cy + cardH / 2);
+        // 名称
+        ctx.fillStyle = it.picked ? '#5a6470' : '#d8e2ec';
+        ctx.font = '9px Cascadia Code, monospace';
+        const nameText = (def.label || '???').slice(0, 6);
+        ctx.fillText(nameText, cx + 16, cy + cardH / 2);
+        // 数量
+        if (it.qty > 1) {
+            ctx.fillStyle = it.picked ? '#5a6470' : '#d8a45c';
+            ctx.font = 'bold 8px Cascadia Code, monospace';
+            ctx.textAlign = 'right';
+            ctx.fillText('×' + it.qty, cx + cardW - 4, cy + cardH / 2);
+        }
+        // 价值（右侧小字）
+        ctx.fillStyle = it.picked ? '#5a6470' : '#7aaa6a';
+        ctx.font = '7px Cascadia Code, monospace';
+        ctx.textAlign = 'right';
+        ctx.fillText(def.value + 'p', cx + cardW - 4, cy + 4);
+        ctx.restore();
+    }
+
+    // 超出部分提示
+    if (items.length > maxVisible) {
+        ctx.save();
+        ctx.fillStyle = 'rgba(10, 12, 15, 0.7)';
+        ctx.font = 'bold 8px Cascadia Code, monospace';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        const moreY = baseY - maxVisible * (cardH + cardGap) - 4;
+        ctx.fillText(`+ ${items.length - maxVisible} 更多`, sx, moreY);
+        ctx.restore();
+    }
+
+    // === 操作提示条（容器下方） ===
+    ctx.save();
+    const tipY = sy + c.r + 14;
+    ctx.fillStyle = 'rgba(10, 12, 15, 0.6)';
+    const tipW = 130;
+    const tipH = 13;
+    ctx.fillRect(sx - tipW / 2, tipY, tipW, tipH);
+    ctx.strokeStyle = 'rgba(94, 200, 224, 0.4)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(sx - tipW / 2, tipY, tipW, tipH);
+    ctx.fillStyle = '#5ec8e0';
+    ctx.font = '8px Cascadia Code, monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('[F]拾取  [G]全部  [ESC]关闭', sx, tipY + tipH / 2);
+    ctx.restore();
 }
 
 function showLootDetail(it) {
-    if (!G.lootWindow) return;
-    const def = ITEM_TYPES[it.defKey];
-    if (!def) return;
-    const detail = document.getElementById('loot-detail');
-    if (!detail) return;
-    const density = densityOf(it).toFixed(1);
-    const densityColor = densityOf(it) >= 50 ? 'var(--warm-amber)' : 'var(--text-dim)';
-    detail.innerHTML = `
-        <div class="loot-detail-name">${def.label}</div>
-        <div>
-            <span class="loot-detail-stat">价值 <b>${def.value * it.qty}</b> 点</span>
-            <span class="loot-detail-stat">重量 <b>${(def.weight * it.qty).toFixed(2)}</b> kg</span>
-            <span class="loot-detail-stat" style="color:${densityColor}">密度 <b>${density}</b></span>
-            <span class="loot-detail-stat">种类 <b>${def.kind || '杂项'}</b></span>
-        </div>
-        <div class="loot-detail-desc">${def.label} · 战前时代的遗物，仍有使用价值。</div>
-    `;
+    // v2.0 极简：详情不再单独画，而是用 hover 高亮 + 容器旁的工具提示
+    // 保留为空函数以兼容历史调用
+    return;
 }
 
 function pickLootItem(uid) {
@@ -2166,7 +2263,13 @@ function pickLootItem(uid) {
     if (typeof spawnParticles === 'function') {
         spawnParticles(p.x, p.y, def.color, 8, 80);
     }
-    renderLootWindow();
+    // === v2.0 极简：头顶飘字反馈 ===
+    const qtyText = it.qty > 1 ? ` ×${it.qty}` : '';
+    const color = def.kind === 'weapon' ? '#d8a45c' :
+                  def.kind === 'armor' ? '#7aaa6a' :
+                  def.kind === 'ammo' ? '#5ec8e0' : '#9aa8b8';
+    spawnFloatingText(p.x, p.y - 18, `+ ${def.label}${qtyText}`, color);
+
     // 关闭界面（全部拾取完则自动关）
     const allPicked = w.items.every(x => x.picked);
     if (allPicked) {
@@ -2184,23 +2287,12 @@ function pickAllLootItems() {
 function sortLootItems(by) {
     if (!G.lootWindow) return;
     G.lootWindow.sortBy = by;
-    renderLootWindow();
+    G.lootWindow.animPhase = 1;  // 排序后稳定显示
 }
 
-// 初始化拾取界面事件（仅在 DOM 加载后绑定一次）
+// 初始化拾取界面事件（v2.0 极简：不再绑定 DOM 事件，全部由键盘 / 鼠标位置判定）
 function initLootWindowEvents() {
-    const close = document.getElementById('loot-close');
-    if (close) close.addEventListener('click', hideLootWindow);
-    const pickAll = document.getElementById('loot-pick-all');
-    if (pickAll) pickAll.addEventListener('click', pickAllLootItems);
-    document.querySelectorAll('.loot-sort-btn').forEach(btn => {
-        btn.addEventListener('click', () => sortLootItems(btn.dataset.sort));
-    });
-    const grid = document.getElementById('loot-grid');
-    if (grid) grid.addEventListener('mouseleave', () => {
-        const detail = document.getElementById('loot-detail');
-        if (detail) detail.innerHTML = '<span class="loot-detail-empty">悬停物品查看详情</span>';
-    });
+    // 空函数占位
 }
 
 // -------------------- 射击 --------------------
@@ -3974,8 +4066,9 @@ function update(now) {
         }
     }
 
-    // ---- HUD 更新 ----
-    updateHUD();
+    // ---- HUD 更新（v2.0 极简：改为世界空间渲染） ----
+    // updateHUD() 已废弃
+    updateFloatingTexts(dt);
 
     // 装弹进度显示（把武器栏 active 一下）
     // 更新武器 UI 的时机在 updateHUD 内部做
@@ -4021,9 +4114,9 @@ function startExtractAnim() {
             delay: hash2d(i, 24, 88) * 0.4
         }))
     };
-    // 隐藏 HUD
-    document.getElementById('interact-hint').classList.add('hidden');
-    document.getElementById('objective').classList.add('hidden');
+    // 隐藏交互提示
+    const hintEl = document.getElementById('interact-hint');
+    if (hintEl) hintEl.classList.add('hidden');
     Sound.extract();
 }
 
@@ -4586,6 +4679,22 @@ function render() {
 
     ctx.restore();
 
+    // === v2.0 极简：玩家脚下血量色环 + 武器弹量 ===
+    drawHealthRing(ctx, G.player, G.camera);
+    drawWeaponAmmo(ctx, G.player, G.camera);
+
+    // === v2.0 极简：世界空间飘字（拾取反馈、撤离成功等） ===
+    drawFloatingTexts(ctx, G.camera);
+
+    // === v2.0 极简：世界空间拾取卡片（容器附属 UI） ===
+    if (G.lootWindow) drawLootCardsWorldSpace(ctx, G.lootWindow, G.camera);
+    else if (_closingLootWindow) {
+        // 关闭动画中的幽灵窗口（alpha 渐隐）
+        const elapsed = performance.now() - _closingLootWindow.closingAt;
+        const alpha = Math.max(0, 1 - elapsed / 200);
+        if (alpha > 0.01) drawLootCardsWorldSpace(ctx, _closingLootWindow, G.camera, alpha);
+    }
+
     // === 环境效果层 ===
     drawEnvironmentEffects();
 
@@ -4604,20 +4713,6 @@ function render() {
         hintEl.textContent = G.interactHint.text;
     } else {
         hintEl.classList.add('hidden');
-    }
-
-    // ---- 撤离目标提示 ----
-    const objEl = document.getElementById('objective');
-    if (G.objectiveShown && G.lootValue >= LOOT_GOAL) {
-        objEl.classList.remove('hidden');
-        let remaining = G.extractZones.find(z => z.active && z.elapsed > 0);
-        if (remaining) {
-            objEl.textContent = `正在撤离 … ${remaining.elapsed.toFixed(1)} 秒（离开圆圈会重置）`;
-        } else {
-            objEl.textContent = `撤离点已激活 — 走到任意闪烁的蓝色圈中停留 5 秒`;
-        }
-    } else {
-        objEl.classList.add('hidden');
     }
 
     // 雷达
@@ -5976,174 +6071,218 @@ function drawExtractZone(z) {
 }
 
 function drawRadar() {
-    const r = radarCtx;
-    r.clearRect(0, 0, 180, 180);
+    // v2.0 极简：把雷达画在主画布右下角的小方框里
+    const r = ctx;
+    const size = 130;
+    const ox = W - size - 12;
+    const oy = H - size - 12;
     r.save();
-    r.translate(10, 10);
-    const size = 160;
-    r.fillStyle = 'rgba(10, 16, 22, 0.85)';
+    r.translate(ox, oy);
+    // 背板
+    r.fillStyle = 'rgba(8, 12, 16, 0.55)';
     r.fillRect(0, 0, size, size);
-    r.strokeStyle = 'rgba(94,200,224,0.25)';
+    r.strokeStyle = 'rgba(94, 200, 224, 0.25)';
     r.lineWidth = 1;
+    // 同心圆
     for (let i = 1; i <= 3; i++) {
         r.beginPath();
         r.arc(size / 2, size / 2, (size / 2) * i / 3, 0, Math.PI * 2);
         r.stroke();
     }
+    // 十字
     r.beginPath();
     r.moveTo(size / 2, 0); r.lineTo(size / 2, size);
     r.moveTo(0, size / 2); r.lineTo(size, size / 2);
     r.stroke();
+    // 标签
+    r.fillStyle = 'rgba(94, 200, 224, 0.4)';
+    r.font = '8px Cascadia Code, monospace';
+    r.textAlign = 'left';
+    r.textBaseline = 'top';
+    r.fillText('◆ 战况', 4, 4);
 
+    if (!G.player) { r.restore(); return; }
     const scaleX = size / WORLD.w;
     const scaleY = size / WORLD.h;
     const pcx = G.player.x * scaleX;
     const pcy = G.player.y * scaleY;
 
+    // 容器
+    r.fillStyle = '#d8a45c';
     for (const c of G.containers) {
         if (c.opened) continue;
-        r.fillStyle = C.amber;
-        r.fillRect(c.x * scaleX - 1.5, c.y * scaleY - 1.5, 3, 3);
+        r.fillRect(c.x * scaleX - 1, c.y * scaleY - 1, 2, 2);
     }
+    // 撤离点
     for (const z of G.extractZones) {
-        r.fillStyle = z.active ? C.neonCyan : 'rgba(94,200,224,0.3)';
+        r.fillStyle = z.active ? '#5ec8e0' : 'rgba(94,200,224,0.3)';
         r.beginPath();
-        r.arc(z.x * scaleX, z.y * scaleY, 3, 0, Math.PI * 2);
+        r.arc(z.x * scaleX, z.y * scaleY, 2.5, 0, Math.PI * 2);
         r.fill();
     }
+    // 敌人
     for (const e of G.enemies) {
         if (e.state === 'dead') continue;
         const d = dist(e, G.player);
         if (d < 800) {
-            r.fillStyle = e.state === 'chase' ? C.danger : '#c898a8';
+            r.fillStyle = e.state === 'chase' ? '#b85a6e' : '#c898a8';
             r.beginPath();
-            r.arc(e.x * scaleX, e.y * scaleY, 2.5, 0, Math.PI * 2);
+            r.arc(e.x * scaleX, e.y * scaleY, 2, 0, Math.PI * 2);
             r.fill();
         }
     }
-    r.fillStyle = C.neonCyan;
+    // 玩家
+    r.fillStyle = '#5ec8e0';
     r.beginPath();
-    r.arc(pcx, pcy, 4, 0, Math.PI * 2);
+    r.arc(pcx, pcy, 3, 0, Math.PI * 2);
     r.fill();
     r.strokeStyle = '#e8f6ff';
-    r.lineWidth = 1.5;
+    r.lineWidth = 1.2;
     r.beginPath();
     r.moveTo(pcx, pcy);
-    r.lineTo(pcx + Math.cos(G.player.angle) * 10, pcy + Math.sin(G.player.angle) * 10);
+    r.lineTo(pcx + Math.cos(G.player.angle) * 7, pcy + Math.sin(G.player.angle) * 7);
     r.stroke();
 
-    r.strokeStyle = 'rgba(94,200,224,0.15)';
-    r.lineWidth = 1;
-    r.strokeRect(0, 0, size, size);
-
+    // 扫描线
     const scan = (G.time * 0.8) % (Math.PI * 2);
-    const grd2 = r.createLinearGradient(
-        pcx, pcy,
-        pcx + Math.cos(scan) * 80,
-        pcy + Math.sin(scan) * 80
-    );
-    grd2.addColorStop(0, 'rgba(94,200,224,0.3)');
-    grd2.addColorStop(1, 'rgba(94,200,224,0)');
-    r.fillStyle = grd2;
+    r.strokeStyle = 'rgba(94, 200, 224, 0.5)';
+    r.lineWidth = 1;
     r.beginPath();
     r.moveTo(pcx, pcy);
-    r.arc(pcx, pcy, 80, scan - 0.25, scan);
-    r.closePath();
-    r.fill();
+    r.lineTo(pcx + Math.cos(scan) * (size / 2), pcy + Math.sin(scan) * (size / 2));
+    r.stroke();
+
+    // 边框
+    r.strokeStyle = 'rgba(94, 200, 224, 0.15)';
+    r.lineWidth = 1;
+    r.strokeRect(0, 0, size, size);
     r.restore();
 }
 
-function updateHUD() {
-    const p = G.player;
-    document.getElementById('hp-fill').style.width = ((p.hp / p.maxHp) * 100) + '%';
-    document.getElementById('stm-fill').style.width = ((p.stamina / p.maxStamina) * 100) + '%';
-    const lootText = `已搜刮: ${G.lootValue} 点 · 负重 ${p.weight.toFixed(1)}/${p.maxWeight}kg`;
-    document.getElementById('loot-text').textContent = lootText;
-    const radText = `辐射: ${Math.min(100, Math.floor((G.time / 180) * 100))}%`;
-    document.getElementById('rad-text').textContent = radText;
-    document.getElementById('cover-text').textContent = p.inCover ? '掩体中' : '暴露';
+// === v2.0 极简版：所有状态信息改为世界空间渲染 ===
+// 玩家脚下色环 + 武器上弹量数字 + 头顶拾取飘字 + 全屏染色
+// 不再需要 updateHUD()
 
-    for (let i = 0; i < 2; i++) {
-        const slotEl = document.getElementById('weapon-slot-' + (i + 1));
-        const w = p.weapons[i];
-        if (!w) {
-            slotEl.querySelector('.slot-name').textContent = '空';
-            slotEl.querySelector('.slot-name').classList.add('empty');
-            slotEl.querySelector('.slot-ammo').textContent = '-';
-            slotEl.querySelector('.slot-ammo').classList.add('empty');
-        } else {
-            slotEl.querySelector('.slot-name').textContent = w.melee ? '战术刀' : w.name;
-            slotEl.querySelector('.slot-name').classList.remove('empty');
-            slotEl.querySelector('.slot-ammo').textContent =
-                w.melee ? '∞' : `${w.mag}/${p.inventory[w.ammoType] || 0}`;
-            slotEl.querySelector('.slot-ammo').classList.remove('empty');
-        }
-        slotEl.classList.toggle('active', i === p.currentWeapon);
-    }
-    const armorEl = document.getElementById('armor-slot');
-    if (p.armor) {
-        const def = ITEM_TYPES[p.armor.type];
-        armorEl.querySelector('.slot-name').textContent = def.label;
-        armorEl.querySelector('.slot-name').classList.remove('empty');
-        armorEl.querySelector('.slot-ammo').textContent = `-${Math.round(p.armor.reduction * 100)}%`;
-        armorEl.querySelector('.slot-ammo').classList.remove('empty');
+// ========== 玩家脚下血量色环（世界空间） ==========
+function drawHealthRing(ctx, p, cam) {
+    if (!p) return;
+    const ratio = Math.max(0, Math.min(1, p.hp / p.maxHp));
+    // 色相：满血绿/中血黄/低血红
+    let color;
+    if (ratio > 0.6) color = '#7aaa6a';
+    else if (ratio > 0.3) color = '#d8a45c';
+    else color = '#b85a6e';
+    const sx = p.x - cam.x + ctx.canvas.width / 2;
+    const sy = p.y - cam.y + ctx.canvas.height / 2;
+    // 足下色环
+    ctx.save();
+    ctx.translate(sx, sy + 14);
+    // 暗背景圈
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.45)';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.arc(0, 0, 18, 0, Math.PI * 2);
+    ctx.stroke();
+    // 血量弧
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 3;
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 6;
+    ctx.beginPath();
+    ctx.arc(0, 0, 18, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * ratio);
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+    // 中心血量数字
+    ctx.fillStyle = color;
+    ctx.font = 'bold 9px Cascadia Code, monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(Math.round(p.hp), 0, 0);
+    ctx.restore();
+}
+
+// ========== 武器上弹量数字（世界空间） ==========
+function drawWeaponAmmo(ctx, p, cam) {
+    if (!p || !p.weapons) return;
+    const w = p.weapons[p.currentWeapon];
+    if (!w) return;
+    const sx = p.x - cam.x + ctx.canvas.width / 2;
+    const sy = p.y - cam.y + ctx.canvas.height / 2;
+    let text;
+    if (w.melee) {
+        text = '∞';
     } else {
-        armorEl.querySelector('.slot-name').textContent = '无护甲';
-        armorEl.querySelector('.slot-name').classList.add('empty');
-        armorEl.querySelector('.slot-ammo').textContent = '-';
-        armorEl.querySelector('.slot-ammo').classList.add('empty');
+        text = `${w.mag || 0}/${p.inventory[w.ammoType] || 0}`;
     }
+    ctx.save();
+    ctx.font = 'bold 10px Cascadia Code, monospace';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    // 颜色：弹量低时变红
+    let color = '#5ec8e0';
+    if (w.mag === 0 && !w.melee) color = '#b85a6e';
+    else if ((w.mag || 0) <= 3 && !w.melee) color = '#d8a45c';
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
+    ctx.shadowBlur = 4;
+    ctx.fillStyle = color;
+    // 画在玩家头部上方
+    ctx.fillText(text, sx + 8, sy - 16);
+    ctx.restore();
+}
 
-    document.getElementById('count-9mm').textContent = p.inventory['9mm'] || 0;
-    document.getElementById('count-rifle').textContent = p.inventory.rifle || 0;
-    document.getElementById('count-shotgun').textContent = p.inventory.shotgun || 0;
-    document.getElementById('count-med').textContent = p.inventory.med || 0;
-    document.getElementById('count-food').textContent = p.inventory.food || 0;
-    document.getElementById('count-chip').textContent = p.inventory.chip || 0;
-    document.getElementById('count-rare').textContent = p.inventory.rare || 0;
+// ========== 头顶拾取飘字（世界空间） ==========
+const floatingTexts = [];
 
-    // === 手雷槽位显示 ===
-    const order = ['frag', 'molotov', 'emp', 'flash'];
-    const selType = order[G.selectedGrenade] || 'frag';
-    const selDef = GRENADE_TYPES[selType];
-    const selCount = p.inventory['grenade_' + selType] || 0;
-    const grenNameEl = document.getElementById('grenade-slot-name');
-    const grenAmmoEl = document.getElementById('grenade-slot-ammo');
-    const grenChargeEl = document.getElementById('grenade-charge');
-    const grenSlotEl = document.getElementById('weapon-slot-grenade');
-    if (grenNameEl) grenNameEl.textContent = selDef.name;
-    if (grenAmmoEl) {
-        grenAmmoEl.textContent = '× ' + selCount;
-        grenAmmoEl.style.color = selCount > 0 ? selDef.color : '#666';
-    }
-    if (grenSlotEl) {
-        grenSlotEl.style.borderColor = selCount > 0 ? selDef.color : 'rgba(77, 217, 255, 0.2)';
-    }
-    if (grenChargeEl) {
-        const charge = Math.min(1, G.grenadeHoldTime || 0);
-        grenChargeEl.style.width = (charge * 100) + '%';
-        grenChargeEl.style.background = selDef.color;
-    }
+function spawnFloatingText(x, y, text, color = '#5ec8e0') {
+    floatingTexts.push({
+        x, y, text, color,
+        life: 1.6,    // 存活秒数
+        maxLife: 1.6,
+        vy: -28       // 上浮速度
+    });
+}
 
-    // 任务显示
-    const missionEl = document.getElementById('mission-text');
-    if (missionEl && G.mission) {
-        const m = G.mission;
-        let progress = '';
-        if (m.id === 'explore') progress = ` (${m.visitedZones || 0}/3)`;
-        else if (m.id === 'headhunter') progress = ` (${m.eliteKilled || 0}/2)`;
-        else if (m.id === 'loot_value') progress = ` (${G.lootValue}/300)`;
-        missionEl.textContent = m.completed ? `✓ ${m.name}` : `◆ ${m.name}${progress}`;
-        missionEl.style.color = m.completed ? '#8aff9d' : '#d8a45c';
+function updateFloatingTexts(dt) {
+    for (let i = floatingTexts.length - 1; i >= 0; i--) {
+        const ft = floatingTexts[i];
+        ft.life -= dt;
+        ft.y += ft.vy * dt;
+        if (ft.life <= 0) floatingTexts.splice(i, 1);
     }
+}
+
+function drawFloatingTexts(ctx, cam) {
+    ctx.save();
+    ctx.font = 'bold 11px Cascadia Code, monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    for (const ft of floatingTexts) {
+        const sx = ft.x - cam.x + ctx.canvas.width / 2;
+        const sy = ft.y - cam.y + ctx.canvas.height / 2;
+        const alpha = Math.min(1, ft.life / 0.5);
+        ctx.globalAlpha = alpha;
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.95)';
+        ctx.shadowBlur = 4;
+        ctx.fillStyle = ft.color;
+        ctx.fillText(ft.text, sx, sy);
+    }
+    ctx.globalAlpha = 1;
+    ctx.restore();
+}
+
+// ========== 全屏染色（死亡/胜利） ==========
+function flashScreen(color) {
+    const el = document.getElementById('screen-flash');
+    if (!el) return;
+    const cls = color === 'red' ? 'flash-red' : 'flash-cyan';
+    el.classList.add(cls);
+    setTimeout(() => el.classList.remove(cls), 600);
 }
 
 function endGame(success) {
     if (G.ended) return;
     G.ended = true;
     G.inventoryOpen = false;
-    document.getElementById('inventory-overlay').classList.add('hidden');
-    // 停止背景音乐
     Music.stop();
     // === 成就系统：记录本局统计 ===
     ACHIEVEMENT_STATE.totalRuns += 1;
@@ -6152,7 +6291,6 @@ function endGame(success) {
     ACHIEVEMENT_STATE.lastRunNoDamage = G.player.hp >= G.player.maxHp - 0.5;
     ACHIEVEMENT_STATE.lastExtractTime = Math.floor(G.time);
     ACHIEVEMENT_STATE.lastExtractLoot = G.lootValue;
-    // 杀光所有敌人？
     const alive = G.enemies.filter(e => e.state !== 'dead').length;
     ACHIEVEMENT_STATE.lastRunAllKills = (alive === 0 && G.enemies.length > 0);
     if (success) {
@@ -6163,54 +6301,35 @@ function endGame(success) {
     }
     saveAchievements();
     checkAchievements();
-
-    const titleEl = document.getElementById('end-title');
-    const subtitleEl = document.getElementById('end-subtitle');
-    const statsEl = document.getElementById('end-stats');
-    if (success) {
-        titleEl.textContent = '撤离成功';
-        subtitleEl.textContent = 'EXFILTRATION COMPLETE';
-        titleEl.style.color = '#5ec8e0';
-        titleEl.style.textShadow = '0 0 18px rgba(94,200,224,0.5)';
-        G.inventoryContext = 'endsuccess';
-        // === 把本局物品搬入仓库 ===
-        depositRaidToStash();
-    } else {
-        titleEl.textContent = '任务失败';
-        subtitleEl.textContent = 'AGENT DOWN · 物资已遗失';
-        titleEl.style.color = '#b85a6e';
-        titleEl.style.textShadow = '0 0 18px rgba(184,90,110,0.5)';
-        G.inventoryContext = 'endfail';
-    }
-
     const timeMin = Math.floor(G.time / 60);
     const timeSec = Math.floor(G.time % 60);
     const bonus = success ? Math.max(0, 300 - Math.floor(G.time) * 3) : 0;
     const total = G.lootValue + bonus;
     const kills = G.enemies.filter(e => e.state === 'dead').length;
     G.lastExtractedValue = success ? G.lootValue : 0;
-
-    // 经验计算和保存
     const xpGained = kills * 15 + (success ? 50 : 10) + Math.floor(G.lootValue / 10);
     addXp(xpGained);
     PLAYER_PROGRESS.totalKills += kills;
     if (success) PLAYER_PROGRESS.totalExtractions++;
     saveProgress();
-
-    statsEl.innerHTML = `
-        <div class="stat-line"><span class="label">任务时长</span><span class="value">${timeMin}分${timeSec}秒</span></div>
-        <div class="stat-line"><span class="label">搜刮物资</span><span class="value">${G.lootValue} 点</span></div>
-        <div class="stat-line"><span class="label">击杀</span><span class="value">${kills}</span></div>
-        <div class="stat-line"><span class="label">速度奖励</span><span class="value">+${bonus}</span></div>
-        <div class="stat-line"><span class="label">获得经验</span><span class="value">+${xpGained} XP</span></div>
-        <div class="stat-line"><span class="label">角色等级</span><span class="value">Lv.${PLAYER_PROGRESS.level}</span></div>
-        <div class="stat-line total"><span class="label">最终得分</span><span class="value cyan">${total}</span></div>
-    `;
-    // 结算界面里嵌入"角色 + 装备"轻量预览
-    injectEndMiniPanel(success);
-    // 同步开始界面的"仓库/装备"预览
-    refreshStartMiniPanel();
-    document.getElementById('end-overlay').classList.remove('hidden');
+    if (success) {
+        G.inventoryContext = 'endsuccess';
+        depositRaidToStash();
+        // 胜利：青色脉冲
+        flashScreen('cyan');
+        // 在玩家位置喷出"撤离成功"等文字
+        spawnFloatingText(G.player.x, G.player.y - 30, '✓ 撤离成功', '#5ec8e0');
+        spawnFloatingText(G.player.x, G.player.y - 50, `${G.lootValue} 点 · ${kills} 杀`, '#5ec8e0');
+    } else {
+        G.inventoryContext = 'endfail';
+        // 失败：红色脉冲
+        flashScreen('red');
+        spawnFloatingText(G.player.x, G.player.y - 30, '✗ 任务失败', '#b85a6e');
+    }
+    // === v2.0 极简：4 秒后自动重开局 ===
+    setTimeout(() => {
+        if (G.ended) startGame();
+    }, 4000);
 }
 
 // 把本局背包 + 装备里的物品搬入 STASH
@@ -6272,38 +6391,8 @@ function pushStash(item) {
 
 // 结算页：注入"角色 + 装备 + 仓库"小面板
 function injectEndMiniPanel(success) {
-    const box = document.querySelector('#end-overlay .menu-box');
-    if (!box) return;
-    // 移除旧的小面板（如果存在）
-    const old = box.querySelector('.inv-mini');
-    if (old) old.remove();
-    const wrap = document.createElement('div');
-    wrap.className = 'inv-mini';
-    const p = G.player || createPlayer();
-    const armorStr = p.armor ? `${Math.round(p.armor.reduction * 100)}%` : '无';
-    const w0 = p.weapons[0] ? p.weapons[0].name : '—';
-    const w1 = p.weapons[1] ? p.weapons[1].name : '—';
-    const ctxText = success
-        ? '撤离成功 · 物资已入库'
-        : '任务失败 · 物资已遗失';
-    wrap.innerHTML = `
-        <canvas id="end-mini-canvas" width="180" height="240"></canvas>
-        <div>
-            <div class="inv-mini-stat"><b>${ctxText}</b></div>
-            <div class="inv-mini-stat">生命 <b>${p.hp}/${p.maxHp}</b></div>
-            <div class="inv-mini-stat">护甲 <b>${armorStr}</b></div>
-            <div class="inv-mini-stat">负重 <b>${p.weight.toFixed(1)}/${p.maxWeight.toFixed(1)}</b> kg</div>
-            <div class="inv-mini-stat">主武器 <b>${w0}</b> · 副武器 <b>${w1}</b></div>
-            <div class="inv-mini-stat">仓库 <b class="amber">${STASH.items.length}</b> / ${STASH.capacity} 项</div>
-            <div class="inv-mini-stat">总价值 <b class="amber">${STASH.items.reduce((s, x) => s + x.value * x.qty, 0)}</b> 点</div>
-        </div>
-    `;
-    // 插到 stats 前面
-    const stats = box.querySelector('#end-stats');
-    if (stats) box.insertBefore(wrap, stats);
-    else box.appendChild(wrap);
-    // 画小人物
-    drawMiniCharacter(wrap.querySelector('canvas'), p);
+    // v2.0 极简：不再注入结算小面板
+    return;
 }
 
 // 仓库 → 拿回玩家（用在：开始界面 / 结算之后 / 战局中点"装备"时）
@@ -6435,43 +6524,10 @@ function recomputeWeight() {
     p.weight = w;
 }
 
-// 开始界面的角色 + 仓库轻量预览
-function refreshStartMiniPanel() {
-    const stashCount = document.getElementById('start-stash-count');
-    const stashVal = document.getElementById('start-stash-value');
-    const levelEl = document.getElementById('start-player-level');
-    const xpEl = document.getElementById('start-player-xp');
-    if (stashCount) stashCount.textContent = STASH.items.length;
-    if (stashVal) stashVal.textContent = STASH.items.reduce((s, x) => s + x.value * x.qty, 0);
-    if (levelEl) levelEl.textContent = PLAYER_PROGRESS.level;
-    if (xpEl) xpEl.textContent = `${PLAYER_PROGRESS.xp}/${PLAYER_PROGRESS.xpToNext}`;
-    // 画人物 — 从 STASH 推断当前装备
-    const canvas = document.getElementById('start-mini-canvas');
-    if (canvas) {
-        // 临时构造一个 player-like 对象用于绘制
-        const fake = {
-            armor: null,
-            weapons: [createWeapon('pistol')]
-        };
-        // 找仓库里的护甲
-        for (const it of STASH.items) {
-            const def = ITEM_TYPES[it.key];
-            if (def && def.kind === 'armor' && !fake.armor) {
-                fake.armor = { type: it.key, reduction: def.reduction };
-            }
-            // 找武器
-            if (def && def.kind === 'weapon' && fake.weapons[0].key === 'pistol') {
-                fake.weapons[0] = createWeapon(def.weaponKey);
-            }
-        }
-        drawMiniCharacter(canvas, fake);
-    }
-}
+// 开始界面的角色 + 仓库轻量预览（v2.0 极简：空操作占位）
+function refreshStartMiniPanel() { /* v2.0 极简：不再有开始界面 */ }
 
 function startGame() {
-    document.getElementById('menu-overlay').classList.add('hidden');
-    document.getElementById('end-overlay').classList.add('hidden');
-    document.getElementById('inventory-overlay').classList.add('hidden');
     loadProgress();
     loadStash();
     loadAchievements();
@@ -6487,8 +6543,10 @@ function startGame() {
     G.startedAt = performance.now();
     G.time = 0;
     lastTime = performance.now();
+    // 清空世界空间飘字
+    if (typeof floatingTexts !== 'undefined') floatingTexts.length = 0;
     // === 重置本局统计 ===
-    ACHIEVEMENT_STATE.lastRunNoDamage = true;  // 默认假设无伤，未被攻击时保持
+    ACHIEVEMENT_STATE.lastRunNoDamage = true;
     ACHIEVEMENT_STATE.lastRunAllKills = false;
     ACHIEVEMENT_STATE.lastRunRare = 0;
     ACHIEVEMENT_STATE.lastRunMaxWeight = 0;
@@ -6496,22 +6554,8 @@ function startGame() {
     ACHIEVEMENT_STATE.lastExtractLoot = 0;
 }
 
-document.getElementById('start-btn').addEventListener('click', startGame);
-document.getElementById('restart-btn').addEventListener('click', startGame);
 // 在任何用户交互时恢复音频上下文（浏览器自动播放策略）
 document.addEventListener('pointerdown', () => { Sound.init(); Sound.resume(); }, { once: true });
-document.getElementById('open-inventory-btn').addEventListener('click', () => {
-    // 关闭结算界面，切换到 base 上下文，打开库存
-    document.getElementById('end-overlay').classList.add('hidden');
-    G.inventoryContext = 'endsuccess';
-    openInventory();
-});
-document.getElementById('open-inventory-hotbar').addEventListener('click', () => {
-    if (G.running) {
-        G.inventoryContext = 'raid';
-        openInventory();
-    }
-});
 
 // ====================================================
 //  库存 / 装备管理页（按 TAB 打开 / 关闭）
@@ -6736,253 +6780,30 @@ function kindToTag(key) {
 
 // 渲染整张库存页
 function renderInventory() {
-    if (!G.inventoryOpen) return;
-    let p = G.player;
-    // 没有 G.player 时（例如回到基地），用 STASH 内容合成一个预览玩家
-    if (!p) {
-        p = {
-            weight: 0, maxWeight: 8.0, hp: 100, maxHp: 100, armor: null,
-            weapons: [createWeapon('pistol')], equipment: {
-                head: null, body: null, primary: null, secondary: null, melee: null, backpack: null
-            },
-            inventory: {}
-        };
-        // 从 STASH 推断装备
-        for (const it of STASH.items) {
-            const def = ITEM_TYPES[it.key];
-            if (!def) continue;
-            if (def.kind === 'armor' && !p.equipment.body) {
-                p.equipment.body = { key: it.key };
-                p.armor = { type: it.key, reduction: def.reduction };
-            } else if (def.kind === 'weapon' && p.weapons[0].key === 'pistol') {
-                p.weapons[0] = createWeapon(def.weaponKey);
-                p.equipment.primary = { key: it.key };
-            }
-        }
-    }
-
-    // === 状态条 ===
-    document.getElementById('inv-weight').textContent = p.weight.toFixed(1);
-    document.getElementById('inv-weight-max').textContent = p.maxWeight.toFixed(1);
-    const totalVal = computeRaidValue() + (G.inventoryContext === 'raid' ? 0 : STASH.items.reduce((s, x) => s + x.value * x.qty, 0));
-    document.getElementById('inv-value').textContent = totalVal;
-    const ctxLabel = document.getElementById('inv-context-label');
-    if (G.inventoryContext === 'raid') {
-        ctxLabel.textContent = '战局中 · 拾取后无法放回仓库';
-        ctxLabel.className = '';
-    } else if (G.inventoryContext === 'endsuccess') {
-        ctxLabel.textContent = '撤离成功 · 物资已入仓库';
-        ctxLabel.className = 'base';
-    } else if (G.inventoryContext === 'endfail') {
-        ctxLabel.textContent = '任务失败 · 物资已遗失';
-        ctxLabel.className = 'endfail';
-    } else {
-        ctxLabel.textContent = '基地 · 整理仓库与装备';
-        ctxLabel.className = 'base';
-    }
-
-    // === 仓库列 ===
-    const stashGrid = document.getElementById('inv-stash-grid');
-    stashGrid.innerHTML = '';
-    const stashDisabled = (G.inventoryContext === 'raid' || G.inventoryContext === 'endfail');
-    if (STASH.items.length === 0) {
-        for (let i = 0; i < 8; i++) {
-            const cell = document.createElement('div');
-            cell.className = 'inv-cell empty';
-            stashGrid.appendChild(cell);
-        }
-    } else {
-        for (let i = 0; i < STASH.items.length; i++) {
-            const it = STASH.items[i];
-            stashGrid.appendChild(makeItemCell({
-                source: 'stash', stashIdx: i, key: it.key, qty: it.qty,
-                kind: it.kind, disabled: stashDisabled
-            }));
-        }
-        // 补空位（视觉）
-        for (let i = STASH.items.length; i < Math.max(8, ((STASH.items.length / 4) | 0 + 1) * 4); i++) {
-            const cell = document.createElement('div');
-            cell.className = 'inv-cell empty';
-            stashGrid.appendChild(cell);
-        }
-    }
-    document.getElementById('inv-stash-count').textContent = `${STASH.items.length} 项`;
-
-    // === 本局背包列 ===
-    const bagGrid = document.getElementById('inv-bag-grid');
-    bagGrid.innerHTML = '';
-    const bagKeys = Object.keys(p.inventory).filter(k => (p.inventory[k] || 0) > 0);
-    if (bagKeys.length === 0) {
-        for (let i = 0; i < 8; i++) {
-            const cell = document.createElement('div');
-            cell.className = 'inv-cell empty';
-            bagGrid.appendChild(cell);
-        }
-    } else {
-        for (const k of bagKeys) {
-            const def = ITEM_TYPES[k];
-            bagGrid.appendChild(makeItemCell({
-                source: 'bag', key: k, qty: p.inventory[k],
-                kind: def ? def.kind : 'loot',
-                disabled: false
-            }));
-        }
-    }
-    document.getElementById('inv-bag-count').textContent = `${bagKeys.length} 项`;
-
-    // === 装备槽 ===
-    const slotLabels = { head: '头盔', body: '护甲', primary: '主武', secondary: '副武', melee: '近战', backpack: '背包' };
-    for (const slot of Object.keys(p.equipment)) {
-        const slotEl = document.querySelector(`.inv-equip-slot[data-slot="${slot}"]`);
-        if (!slotEl) continue;
-        const content = slotEl.querySelector('.inv-slot-content');
-        const e = p.equipment[slot];
-        slotEl.classList.toggle('filled', !!e);
-        if (!e) {
-            content.innerHTML = `<span style="color:var(--text-dim); font-style:italic">${slotLabels[slot]}（空）</span>`;
-        } else {
-            const def = ITEM_TYPES[e.key];
-            content.innerHTML = `<b>${def ? def.label : e.key}</b>`;
-        }
-    }
-
-    // === 中央人物 ===
-    const charCanvas = document.getElementById('inv-character');
-    if (charCanvas) drawMiniCharacter(charCanvas, p);
-
-    // === 详情面板 ===
-    updateInvDetail();
+    // v2.0 极简：库存页已移除
+    return;
 }
 
 function makeItemCell(opts) {
-    const cell = document.createElement('div');
-    const def = ITEM_TYPES[opts.key];
-    cell.className = 'inv-cell';
-    if (def) {
-        if (def.kind === 'weapon') cell.classList.add('weapon');
-        if (def.kind === 'armor') cell.classList.add('armor');
-        if (opts.key === 'rare') cell.classList.add('rare');
-    }
-    if (opts.disabled) cell.classList.add('disabled');
-    if (G.selectedItem && G.selectedItem.key === opts.key
-        && G.selectedItem.source === opts.source
-        && (opts.source !== 'stash' || G.selectedItem.stashIdx === opts.stashIdx)) {
-        cell.classList.add('selected');
-    }
-    // 物品图标
-    const icon = document.createElement('canvas');
-    icon.className = 'inv-icon';
-    icon.width = 28; icon.height = 28;
-    cell.appendChild(icon);
-    drawItemIcon(icon, opts.key, 28);
-    // 数量
-    if (opts.qty > 1) {
-        const q = document.createElement('div');
-        q.className = 'inv-qty';
-        q.textContent = '×' + opts.qty;
-        cell.appendChild(q);
-    }
-    // 标签（武器/弹药/装备）
-    const tag = document.createElement('div');
-    tag.className = 'inv-tag';
-    tag.textContent = kindToTag(opts.key);
-    cell.appendChild(tag);
-    // 事件
-    cell.addEventListener('mouseenter', () => {
-        G.selectedItem = { source: opts.source, key: opts.key, qty: opts.qty, stashIdx: opts.stashIdx };
-        updateInvDetail();
-        // 重新高亮选中
-        document.querySelectorAll('.inv-cell.selected').forEach(c => c.classList.remove('selected'));
-        cell.classList.add('selected');
-    });
-    cell.addEventListener('dblclick', () => {
-        handleInvDoubleClick(opts);
-    });
-    cell.addEventListener('click', () => {
-        G.selectedItem = { source: opts.source, key: opts.key, qty: opts.qty, stashIdx: opts.stashIdx };
-        updateInvDetail();
-        document.querySelectorAll('.inv-cell.selected').forEach(c => c.classList.remove('selected'));
-        cell.classList.add('selected');
-    });
-    return cell;
+    // v2.0 极简：库存页已移除，保留函数以防外部误调
+    return { appendChild: () => {} };
 }
 
 function handleInvDoubleClick(opts) {
-    if (opts.disabled) return;
-    // 双击逻辑：自动装备 / 入库
-    if (opts.source === 'bag') {
-        const def = ITEM_TYPES[opts.key];
-        if (!def) return;
-        if (def.kind === 'weapon') {
-            // 找空武器槽
-            if (!G.player.equipment.primary) equipFromBag(opts.key, 'primary');
-            else if (!G.player.equipment.secondary) equipFromBag(opts.key, 'secondary');
-            else equipFromBag(opts.key, 'primary');
-        } else if (def.kind === 'armor') {
-            if (!G.player.equipment.body) equipFromBag(opts.key, 'body');
-            else equipFromBag(opts.key, 'body');
-        } else {
-            // 弹药/消耗/loot：可入库
-            if (depositBagToStash(opts.key, opts.qty)) { /* ok */ }
-        }
-    } else if (opts.source === 'stash') {
-        withdrawFromStash(opts.stashIdx, opts.qty);
-    }
-    renderInventory();
+    // v2.0 极简：库存页已移除
+    return;
 }
 
 // 装备槽位点击：卸下 → 回到本局背包
 function bindEquipSlotClicks() {
-    document.querySelectorAll('.inv-equip-slot').forEach(slot => {
-        slot.addEventListener('click', () => {
-            const slotName = slot.dataset.slot;
-            if (G.player.equipment[slotName]) {
-                unequipToBag(slotName);
-                renderInventory();
-            }
-        });
-    });
+    // v2.0 极简：库存页已移除
+    return;
 }
 
 // 物品详情
 function updateInvDetail() {
-    const el = document.getElementById('inv-detail');
-    if (!el) return;
-    const sel = G.selectedItem;
-    if (!sel) {
-        el.className = 'inv-detail empty';
-        el.innerHTML = '悬停物品查看详情 · 双击装备 · 单击装备槽卸下';
-        return;
-    }
-    const def = ITEM_TYPES[sel.key];
-    if (!def) {
-        el.className = 'inv-detail empty';
-        el.textContent = '未知物品';
-        return;
-    }
-    el.className = 'inv-detail';
-    // 详情
-    const icon = document.createElement('canvas');
-    icon.className = 'inv-detail-icon';
-    icon.width = 36; icon.height = 36;
-    drawItemIcon(icon, sel.key, 36);
-    el.innerHTML = '';
-    el.appendChild(icon);
-    const info = document.createElement('div');
-    info.className = 'inv-detail-info';
-    let meta = `重量 ${def.weight} kg · 价值 ${def.value} 点`;
-    if (def.kind === 'armor') meta += ` · 减伤 ${Math.round(def.reduction * 100)}%`;
-    if (def.kind === 'weapon') {
-        const wdef = WEAPONS[def.weaponKey];
-        if (wdef) meta += ` · 伤害 ${wdef.dmg} · 弹匣 ${wdef.maxMag}`;
-    }
-    info.innerHTML = `
-        <div class="inv-detail-name">${def.label}${sel.qty > 1 ? ' ×' + sel.qty : ''}</div>
-        <div class="inv-detail-meta">${meta}</div>
-        <div class="inv-detail-desc">${getItemDesc(sel.key)}</div>
-        <div class="inv-detail-hint">${getInvHint(sel)}</div>
-    `;
-    el.appendChild(info);
+    // v2.0 极简：库存页已移除
+    return;
 }
 
 function getItemDesc(key) {
@@ -7005,17 +6826,7 @@ function getItemDesc(key) {
 }
 
 function getInvHint(sel) {
-    if (sel.source === 'stash') {
-        if (G.inventoryContext === 'raid') return '战局中：仓库无法取用';
-        if (G.inventoryContext === 'endfail') return '任务失败：仓库无法取用';
-        return '双击：拿回玩家（武器/护甲会装备，弹药/消耗会进背包）';
-    }
-    if (sel.source === 'bag') {
-        const def = ITEM_TYPES[sel.key];
-        if (def.kind === 'weapon') return '双击：装备到主武器槽（占用则替换）';
-        if (def.kind === 'armor') return '双击：装备到护甲槽（占用则替换）';
-        return '双击：存到仓库（仅在非战局时可用）';
-    }
+    // v2.0 极简：库存页已移除
     return '';
 }
 
@@ -7037,39 +6848,21 @@ function computeRaidValue() {
     return v;
 }
 
-// 打开 / 关闭 库存页
-function openInventory() {
-    if (G.ended) return;
-    if (!G.running && G.inventoryContext === 'raid') return;  // 仅阻止"战局中"在玩家不存在时打开
-    // 战局中、基地（end 后回到菜单时可用 base 上下文）
-    G.inventoryOpen = true;
-    document.getElementById('inventory-overlay').classList.remove('hidden');
-    if (G.player) recomputeWeight();
-    bindEquipSlotClicks();
-    renderInventory();
-}
-function closeInventory() {
-    G.inventoryOpen = false;
-    document.getElementById('inventory-overlay').classList.add('hidden');
-    G.selectedItem = null;
-}
-function toggleInventory() {
-    if (G.inventoryOpen) closeInventory();
-    else openInventory();
-}
+// 打开 / 关闭 库存页（v2.0 极简：库存页已移除，全部为 no-op）
+function openInventory() { return; }
+function closeInventory() { return; }
+function toggleInventory() { return; }
 
-// 键盘：TAB
+// 键盘：TAB（v2.0 极简：库存页已移除，绑定为其他用途）
 document.addEventListener('keydown', (e) => {
     if (e.key === 'Tab') {
+        // 占位：v2.0 中 TAB 不再打开库存
         e.preventDefault();
-        toggleInventory();
     }
 });
 
 // 初始：从 localStorage 加载仓库存档
 loadStash();
-// 初始：刷新开始界面的仓库预览（让用户看到"你有一个手无寸铁的拾荒者"）
-refreshStartMiniPanel();
 
 // === v1.7 LOOT-UI: 绑定拾取界面事件（DOM 加载后） ===
 if (document.readyState === 'loading') {
@@ -7087,6 +6880,14 @@ document.addEventListener('keydown', (e) => {
         } else if (e.key === ' ' || e.code === 'Space') {
             pickAllLootItems();
             e.preventDefault();
+        } else if (e.key === 'f' || e.key === 'F') {
+            // F 键：拾取当前悬停的物品
+            if (G.lootWindow.hoverUid) pickLootItem(G.lootWindow.hoverUid);
+            e.preventDefault();
+        } else if (e.key === 'g' || e.key === 'G') {
+            // G 键：全部拾取
+            pickAllLootItems();
+            e.preventDefault();
         }
     }
 });
@@ -7099,6 +6900,8 @@ function loop(now) {
 
 requestAnimationFrame((t) => {
     lastTime = t;
+    // === v2.0 极简：直接开局，无开始菜单 ===
+    if (typeof startGame === 'function') startGame();
     loop(t);
 });
 
